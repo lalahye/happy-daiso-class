@@ -1,0 +1,110 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function myUserDoc() { return get(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function isTeacher() { return signedIn() && myUserDoc().data.role == 'teacher'; }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isTeacher());
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.role == 'student'
+        && request.resource.data.points == 0;
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.role == resource.data.role;
+      allow delete: if isTeacher();
+    }
+
+    match /worksheets/{id} {
+      allow read: if signedIn();
+      allow create, update, delete: if isTeacher();
+    }
+
+    match /classSettings/{id} {
+      allow read: if signedIn();
+      allow create, update, delete: if isTeacher();
+    }
+
+    match /praises/{id} {
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read, update, delete: if isTeacher();
+    }
+
+    match /voices/{id} {
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read, update, delete: if isTeacher();
+    }
+
+    match /artworks/{id} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
+    }
+
+    match /selfCompliments/{id} {
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read, update, delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    match /voteSuggestions/{id} {
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read, update, delete: if isTeacher();
+    }
+
+    match /votes/{id} {
+      allow read: if signedIn();
+      allow create, update, delete: if isTeacher();
+    }
+
+    match /couponSuggestions/{id} {
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read, update, delete: if isTeacher();
+    }
+
+    match /couponPurchases/{id} {
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow update, delete: if isTeacher();
+    }
+
+
+    match /pointTransactions/{id} {
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
+    }
+
+    match /classPointContributions/{id} {
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.amount is int
+        && request.resource.data.amount > 0
+        && request.resource.data.amount <= 1000;
+      allow read: if signedIn();
+      allow update, delete: if isTeacher();
+    }
+
+    match /classRewardVotes/{id} {
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid;
+      allow read: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow delete: if isTeacher();
+    }
+
+    match /worksheetSubmissions/{id} {
+      allow create, update: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow delete: if isTeacher();
+    }
+
+    match /missionCompletions/{id} {
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow update, delete: if isTeacher();
+    }
+  }
+}
