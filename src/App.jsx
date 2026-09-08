@@ -4,11 +4,12 @@ import {
 } from 'firebase/auth';
 import {
   addDoc, collection, doc, getDoc, onSnapshot, orderBy, query,
-  serverTimestamp, setDoc, updateDoc, where, runTransaction
+  serverTimestamp, setDoc, updateDoc, where, runTransaction, deleteDoc
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import Tesseract from 'tesseract.js';
 
 GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -355,6 +356,7 @@ function Gallery({onReward,points}){
     if(!link.trim()) return alert('작품의 공유 링크를 붙여넣어 주세요.');
     await addDoc(collection(db,'artworks'),{
       uid:auth.currentUser.uid,
+      studentName:auth.currentUser.displayName||'학생',
       title,
       link:link.trim(),
       sourceType:mode,
@@ -363,6 +365,12 @@ function Gallery({onReward,points}){
     await onReward();
     setTitle('');setLink('');
     alert('작품 전시 완료! +2P 🎨');
+  };
+
+  const removeArtwork=async a=>{
+    if(a.uid!==auth.currentUser.uid)return;
+    if(!window.confirm(`'${a.title}' 작품을 삭제할까요?\n삭제해도 받은 포인트는 자동으로 회수되지 않아요.`))return;
+    await deleteDoc(doc(db,'artworks',a.id));
   };
 
   return <><PageHead title="작품전시관" points={points}/>
@@ -386,7 +394,7 @@ function Gallery({onReward,points}){
       </form>
     </div>
     <h3 className="section-title">친구들의 작품</h3>
-    <div className="art-grid">{items.map(a=><article className="art-card" key={a.id}><div className="link-art">{a.sourceType==='drive'?'📁':'🔗'}</div><strong>{a.title}</strong><a href={a.link} target="_blank" rel="noreferrer">작품 보러가기</a></article>)}</div>
+    <div className="art-grid">{items.map(a=><article className="art-card" key={a.id}><div className="link-art">{a.sourceType==='drive'?'📁':'🔗'}</div><strong>{a.title}</strong><a href={a.link} target="_blank" rel="noreferrer">작품 보러가기</a>{a.uid===auth.currentUser.uid&&<button className="danger-link" onClick={()=>removeArtwork(a)}>내 작품 삭제</button>}</article>)}</div>
   </>;
 }
 
@@ -413,7 +421,7 @@ function Coupon({points,spend}){
 
 function TeacherApp({profile}){
   const [tab,setTab]=useState('study');
-  return <div className="teacher-shell"><header><div><h1>행복한 다이소반 · 교사 관리자</h1><p>{profile.name||'선생님'} · 4학년 1반</p></div><button onClick={()=>signOut(auth)}>로그아웃</button></header><div className="teacher-tabs"><button className={tab==='study'?'active':''} onClick={()=>setTab('study')}>학습방 관리</button><button className={tab==='classpoints'?'active':''} onClick={()=>setTab('classpoints')}>🏫 학급 포인트</button><button className={tab==='vote'?'active':''} onClick={()=>setTab('vote')}>투표 관리</button><button className={tab==='coupon'?'active':''} onClick={()=>setTab('coupon')}>쿠폰 건의함</button><button className={tab==='settings'?'active':''} onClick={()=>setTab('settings')}>⚙️ 앱 설정</button></div>{tab==='study'&&<TeacherStudy/>}{tab==='classpoints'&&<TeacherClassPoints/>}{tab==='vote'&&<TeacherVote/>}{tab==='coupon'&&<TeacherSuggestions/>}{tab==='settings'&&<TeacherSettings/>}</div>
+  return <div className="teacher-shell"><header><div><h1>행복한 다이소반 · 교사 관리자</h1><p>{profile.name||'선생님'} · 4학년 1반</p></div><button onClick={()=>signOut(auth)}>로그아웃</button></header><div className="teacher-tabs"><button className={tab==='study'?'active':''} onClick={()=>setTab('study')}>학습방 관리</button><button className={tab==='content'?'active':''} onClick={()=>setTab('content')}>🧰 게시물 관리</button><button className={tab==='classpoints'?'active':''} onClick={()=>setTab('classpoints')}>🏫 학급 포인트</button><button className={tab==='vote'?'active':''} onClick={()=>setTab('vote')}>투표 관리</button><button className={tab==='coupon'?'active':''} onClick={()=>setTab('coupon')}>쿠폰 건의함</button><button className={tab==='settings'?'active':''} onClick={()=>setTab('settings')}>⚙️ 앱 설정</button></div>{tab==='study'&&<TeacherStudy/>}{tab==='content'&&<TeacherContentManager/>}{tab==='classpoints'&&<TeacherClassPoints/>}{tab==='vote'&&<TeacherVote/>}{tab==='coupon'&&<TeacherSuggestions/>}{tab==='settings'&&<TeacherSettings/>}</div>
 }
 
 function useDriveUrl(){
@@ -423,12 +431,83 @@ function useDriveUrl(){
 }
 
 function TeacherStudy(){
- const [title,setTitle]=useState(''),[pdfUrl,setPdfUrl]=useState(''),[count,setCount]=useState(0),[rows,setRows]=useState([]),[busy,setBusy]=useState(false),[items,setItems]=useState([]),[subs,setSubs]=useState([]);const driveUrl=useDriveUrl();
+ const [title,setTitle]=useState(''),[pdfUrl,setPdfUrl]=useState(''),[count,setCount]=useState(0),[rows,setRows]=useState([]),[busy,setBusy]=useState(false),[ocrBusy,setOcrBusy]=useState(false),[ocrProgress,setOcrProgress]=useState(0),[items,setItems]=useState([]),[subs,setSubs]=useState([]),[editingId,setEditingId]=useState('');const driveUrl=useDriveUrl();
  useEffect(()=>{const a=onSnapshot(collection(db,'worksheets'),x=>setItems(x.docs.map(d=>({id:d.id,...d.data()}))));const b=onSnapshot(collection(db,'worksheetSubmissions'),x=>setSubs(x.docs.map(d=>({id:d.id,...d.data()}))));return()=>{a();b()}},[]);
  const resize=n=>{n=Math.max(1,Math.min(100,Number(n)||1));setCount(n);setRows(old=>Array.from({length:n},(_,i)=>old[i]||{no:i+1,text:''}).map((x,i)=>({...x,no:i+1})))};
  const detect=async file=>{if(!file)return;setBusy(true);try{const pdf=await getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;let text='';for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i),c=await page.getTextContent();text+=' '+c.items.map(x=>x.str).join(' ')}const nums=[...text.matchAll(/(?:^|\s)(\d{1,2})[.)번]\s/g)].map(m=>+m[1]).filter(n=>n>0&&n<=100);const u=[...new Set(nums)].sort((a,b)=>a-b);let n=0;for(let i=1;i<=100;i++){if(u.includes(i))n=i;else if(n)break}resize(n||Math.max(1,...u));alert(n?`${n}개 문항을 찾았어요. 문제 수가 맞는지 확인해주세요.`:'문항 번호를 찾지 못했어요. 문제 수를 직접 입력해주세요.')}catch(e){console.error(e);resize(count||1);alert('자동 인식에 실패했어요. 문제 수를 직접 입력해주세요.')}finally{setBusy(false)}};
- const submit=async e=>{e.preventDefault();const answers=rows.map(r=>({no:r.no,accepted:r.text.split('|').map(x=>x.trim()).filter(Boolean)}));if(answers.some(a=>!a.accepted.length))return alert('모든 문제의 정답을 입력해주세요.');await addDoc(collection(db,'worksheets'),{title,pdfUrl,questionCount:answers.length,answers,published:true,createdAt:serverTimestamp()});setTitle('');setPdfUrl('');setCount(0);setRows([]);alert('등록 완료! 학생 학습방에 바로 나타납니다.')};
- return <div className="teacher-study-wrap"><div className="teacher-card"><h2>📚 문제지 추가</h2><p className="muted-note">PDF는 Drive에 올리고 링크를 붙여넣습니다. 아래에서 같은 PDF를 선택하면 브라우저가 문항 번호를 읽어 문제 수를 추정합니다.</p>{driveUrl&&<a className="drive-open-btn inline-drive" href={driveUrl} target="_blank" rel="noreferrer">📁 우리 반 공유 드라이브 열기</a>}<form className="form-stack" onSubmit={submit}><input value={title} onChange={e=>setTitle(e.target.value)} placeholder="학습지 제목" required/><input type="url" value={pdfUrl} onChange={e=>setPdfUrl(e.target.value)} placeholder="PDF 공유 링크" required/><div className="pdf-detect-box"><b>① PDF 문제 수 자동 인식</b><input type="file" accept="application/pdf" onChange={e=>detect(e.target.files?.[0])}/><small>{busy?'PDF 분석 중...':'파일은 Firebase에 저장되지 않아요.'}</small></div><label className="count-field"><span>② 문제 수</span><input type="number" min="1" max="100" value={count||''} onChange={e=>resize(e.target.value)} required/></label>{rows.length>0&&<div className="answer-key-editor"><div className="answer-key-title"><b>③ 문제별 정답 입력</b><span>복수 정답은 | 로 구분</span></div>{rows.map((r,i)=><label key={r.no}><b>{r.no}번</b><input value={r.text} onChange={e=>setRows(rows.map((x,j)=>j===i?{...x,text:e.target.value}:x))} placeholder={`${r.no}번 정답`} required/></label>)}</div>}<button className="teacher-publish-btn" disabled={busy||!rows.length}>학생에게 문제지 등록하기</button></form></div><div className="teacher-card"><div className="teacher-section-head"><div><h2>📄 등록된 문제지</h2><p>학생 제출 결과도 실시간 집계됩니다.</p></div><span className="live-badge">● 실시간</span></div>{items.map(w=>{const ss=subs.filter(s=>s.worksheetId===w.id);return <div className="teacher-worksheet-item" key={w.id}><div><b>{w.title}</b><span>{w.questionCount||0}문제 · 제출 {ss.length}명</span></div><a href={w.pdfUrl} target="_blank" rel="noreferrer">PDF 보기</a></div>})}</div></div>;
+ const parseAnswerText=text=>{
+   const clean=(text||'').replace(/\r/g,'\n').replace(/[①❶]/g,'1').replace(/[②❷]/g,'2').replace(/[③❸]/g,'3').replace(/[④❹]/g,'4').replace(/[⑤❺]/g,'5');
+   const found={};
+   const lines=clean.split(/\n+/).map(x=>x.trim()).filter(Boolean);
+   for(const line of lines){
+     const m=line.match(/^\s*(\d{1,3})\s*(?:번|[.)、:-])?\s*[:.)-]?\s*(.+?)\s*$/);
+     if(m){const no=Number(m[1]);if(no>0&&no<=100&&m[2].trim())found[no]=m[2].trim();}
+   }
+   if(Object.keys(found).length<2){
+     const re=/(?:^|\s)(\d{1,3})\s*(?:번|[.)、:-])\s*([^\n]+?)(?=(?:\s+\d{1,3}\s*(?:번|[.)、:-]))|$)/g;
+     let m;while((m=re.exec(clean))){const no=Number(m[1]);if(no>0&&no<=100)found[no]=m[2].trim();}
+   }
+   return found;
+ };
+ const analyzeAnswerSheet=async file=>{
+   if(!file)return;setOcrBusy(true);setOcrProgress(0);
+   try{
+     let text='';
+     if(file.type==='application/pdf'){
+       const pdf=await getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;
+       for(let i=1;i<=pdf.numPages;i++){
+         const page=await pdf.getPage(i),c=await page.getTextContent();
+         const pageText=c.items.map(x=>x.str).join(' ').trim();
+         if(pageText.length>8){text+='\n'+pageText;setOcrProgress(Math.round(i/pdf.numPages*100));}
+         else{
+           const viewport=page.getViewport({scale:2});const canvas=document.createElement('canvas');canvas.width=viewport.width;canvas.height=viewport.height;const ctx=canvas.getContext('2d');await page.render({canvasContext:ctx,viewport}).promise;
+           const result=await Tesseract.recognize(canvas,'kor+eng',{logger:m=>{if(m.status==='recognizing text')setOcrProgress(Math.round(((i-1)+(m.progress||0))/pdf.numPages*100));}});text+='\n'+(result.data.text||'');
+         }
+       }
+     }else{
+       const result=await Tesseract.recognize(file,'kor+eng',{logger:m=>{if(m.status==='recognizing text')setOcrProgress(Math.round((m.progress||0)*100));}});
+       text=result.data.text||'';
+     }
+     const found=parseAnswerText(text), nums=Object.keys(found).map(Number).sort((a,b)=>a-b);
+     if(!nums.length)return alert('답안 번호를 찾지 못했어요. 선명한 이미지로 다시 시도하거나 직접 입력해주세요.');
+     const n=Math.max(...nums);setCount(n);setRows(Array.from({length:n},(_,i)=>({no:i+1,text:found[i+1]||''})));
+     alert(`${nums.length}개 정답을 자동 입력했어요. 빈칸이나 잘못 인식된 답만 확인·수정해주세요.`);
+   }catch(e){console.error(e);alert('답안지 자동 인식에 실패했어요. 이미지가 선명한지 확인해주세요.');}finally{setOcrBusy(false)}
+ };
+ const clearForm=()=>{setTitle('');setPdfUrl('');setCount(0);setRows([]);setEditingId('')};
+ const submit=async e=>{e.preventDefault();const answers=rows.map(r=>({no:r.no,accepted:r.text.split('|').map(x=>x.trim()).filter(Boolean)}));if(answers.some(a=>!a.accepted.length))return alert('빈 정답이 있어요. OCR 결과에서 비어 있거나 잘못 인식된 부분만 수정해주세요.');const data={title,pdfUrl,questionCount:answers.length,answers,published:true,updatedAt:serverTimestamp()};if(editingId){await updateDoc(doc(db,'worksheets',editingId),data);alert('문제지를 수정했습니다.')}else{await addDoc(collection(db,'worksheets'),{...data,createdAt:serverTimestamp()});alert('등록 완료! 학생 학습방에 바로 나타납니다.')}clearForm()};
+ const editWorksheet=w=>{setEditingId(w.id);setTitle(w.title||'');setPdfUrl(w.pdfUrl||'');const a=(w.answers||[]).map(x=>({no:x.no,text:(x.accepted||[]).join(' | ')}));setCount(w.questionCount||a.length||1);setRows(a.length?a:Array.from({length:w.questionCount||1},(_,i)=>({no:i+1,text:''})));window.scrollTo({top:0,behavior:'smooth'})};
+ const removeWorksheet=async w=>{if(!window.confirm(`'${w.title}' 문제지를 삭제할까요?`))return;await deleteDoc(doc(db,'worksheets',w.id));if(editingId===w.id)clearForm()};
+ return <div className="teacher-study-wrap"><div className="teacher-card"><h2>📚 {editingId?'문제지 수정':'문제지 추가'}</h2><p className="muted-note">문제지 PDF는 Drive 링크로 등록하고, 답안지는 이미지/PDF를 올리면 정답을 자동 입력합니다. 잘못 인식된 답만 수정하세요.</p>{driveUrl&&<a className="drive-open-btn inline-drive" href={driveUrl} target="_blank" rel="noreferrer">📁 우리 반 공유 드라이브 열기</a>}<form className="form-stack" onSubmit={submit}><input value={title} onChange={e=>setTitle(e.target.value)} placeholder="학습지 제목" required/><input type="url" value={pdfUrl} onChange={e=>setPdfUrl(e.target.value)} placeholder="PDF 공유 링크" required/><div className="pdf-detect-box"><b>① 문제지 PDF · 문제 수 자동 인식</b><input type="file" accept="application/pdf" onChange={e=>detect(e.target.files?.[0])}/><small>{busy?'PDF 분석 중...':'선택한 파일은 Firebase에 저장되지 않아요.'}</small></div><div className="ocr-answer-box"><div><b>② 답안지 자동 인식 (OCR)</b><span>답안지 사진·스크린샷 또는 텍스트형 PDF</span></div><input type="file" accept="image/*,application/pdf" onChange={e=>analyzeAnswerSheet(e.target.files?.[0])} disabled={ocrBusy}/>{ocrBusy&&<div className="ocr-progress"><i style={{width:`${ocrProgress}%`}}/><span>{ocrProgress}% 분석 중</span></div>}<small>예: 1. 3/4 · 2. 120 · 3. 사과처럼 번호와 정답이 함께 보이면 인식률이 좋아요.</small></div><label className="count-field"><span>③ 문제 수</span><input type="number" min="1" max="100" value={count||''} onChange={e=>resize(e.target.value)} required/></label>{rows.length>0&&<div className="answer-key-editor"><div className="answer-key-title"><b>④ OCR 결과 확인 · 수정</b><span>복수 정답은 | 로 구분</span></div>{rows.map((r,i)=><label key={r.no}><b>{r.no}번</b><input value={r.text} onChange={e=>setRows(rows.map((x,j)=>j===i?{...x,text:e.target.value}:x))} placeholder={`${r.no}번 정답`} required/></label>)}</div>}<div className="teacher-form-actions"><button className="teacher-publish-btn" disabled={busy||ocrBusy||!rows.length}>{editingId?'문제지 수정 저장':'학생에게 문제지 등록하기'}</button>{editingId&&<button type="button" className="light-action" onClick={clearForm}>수정 취소</button>}</div></form></div><div className="teacher-card"><div className="teacher-section-head"><div><h2>📄 등록된 문제지</h2><p>수정·삭제와 학생 제출 결과를 한 곳에서 관리합니다.</p></div><span className="live-badge">● 실시간</span></div>{items.map(w=>{const ss=subs.filter(s=>s.worksheetId===w.id);return <div className="teacher-worksheet-item" key={w.id}><div><b>{w.title}</b><span>{w.questionCount||0}문제 · 제출 {ss.length}명</span></div><div className="admin-actions">{w.pdfUrl&&<a href={w.pdfUrl} target="_blank" rel="noreferrer">PDF 보기</a>}<button onClick={()=>editWorksheet(w)}>수정</button><button className="danger-btn" onClick={()=>removeWorksheet(w)}>삭제</button></div></div>})}</div></div>;
+}
+
+function TeacherContentManager(){
+  const groups=[
+    {key:'praises',title:'💌 칭찬함',fields:['toName','text'],label:x=>`${x.toName||'친구'} · ${x.text||''}`},
+    {key:'voices',title:'📮 불편의 소리',fields:['text'],label:x=>`${x.anonymous?'익명':'학생'} · ${x.text||''}`},
+    {key:'artworks',title:'🎨 작품전시관',fields:['title','link'],label:x=>`${x.title||'작품'} · ${x.link||''}`},
+    {key:'selfCompliments',title:'🌱 나의 기록',fields:['text'],label:x=>`${x.date||''} · ${x.text||''}`},
+    {key:'couponPurchases',title:'🎟️ 쿠폰 구매 요청',fields:['status'],label:x=>`${x.name||'쿠폰'} · ${x.price||0}P · ${x.status||''}`},
+  ];
+  const [active,setActive]=useState('praises'),[items,setItems]=useState([]),[loading,setLoading]=useState(true);
+  const group=groups.find(g=>g.key===active)||groups[0];
+  useEffect(()=>{setLoading(true);const q=query(collection(db,active),orderBy('createdAt','desc'));return onSnapshot(q,s=>{setItems(s.docs.map(d=>({id:d.id,...d.data()})));setLoading(false)},()=>{onSnapshot(collection(db,active),s=>{setItems(s.docs.map(d=>({id:d.id,...d.data()})));setLoading(false)})})},[active]);
+  const editItem=async item=>{
+    const patch={};
+    for(const f of group.fields){const next=window.prompt(`${f==='text'?'내용':f==='title'?'제목':f==='link'?'링크':f==='toName'?'칭찬할 친구':f==='status'?'상태':f} 수정`,item[f]??'');if(next===null)return;patch[f]=next.trim();}
+    await updateDoc(doc(db,active,item.id),patch);alert('수정했습니다.');
+  };
+  const removeItem=async item=>{if(!window.confirm('이 게시물을 삭제할까요?'))return;await deleteDoc(doc(db,active,item.id))};
+  const addItem=async()=>{
+    const base={uid:auth.currentUser.uid,studentName:'선생님',createdAt:serverTimestamp()};
+    if(active==='praises'){const toName=prompt('칭찬할 친구 이름');if(!toName)return;const text=prompt('칭찬 내용');if(!text)return;await addDoc(collection(db,active),{...base,toName,text,status:'new'})}
+    else if(active==='voices'){const text=prompt('등록할 의견/안내 내용');if(!text)return;await addDoc(collection(db,active),{...base,text,anonymous:false,status:'new'})}
+    else if(active==='artworks'){const title=prompt('작품 제목');if(!title)return;const link=prompt('작품 공유 링크');if(!link)return;await addDoc(collection(db,active),{...base,title,link,sourceType:'link'})}
+    else if(active==='selfCompliments'){const text=prompt('기록 내용');if(!text)return;await addDoc(collection(db,active),{...base,text,date:new Date().toISOString().slice(0,10)})}
+    else return alert('쿠폰 구매 요청은 학생이 구매할 때 생성됩니다.');
+    alert('추가했습니다.');
+  };
+  return <div className="teacher-card"><div className="teacher-section-head"><div><h2>🧰 게시물 통합 관리</h2><p>학생이 등록한 내용을 메뉴별로 확인하고 교사가 추가·수정·삭제할 수 있습니다.</p></div><button className="primary-action" onClick={addItem}>+ 새 게시물</button></div><div className="admin-subtabs">{groups.map(g=><button key={g.key} className={active===g.key?'active':''} onClick={()=>setActive(g.key)}>{g.title}</button>)}</div>{loading?<div className="empty-card">불러오는 중...</div>:items.length?<div className="teacher-suggestion-list">{items.map(x=><div className="teacher-suggestion-item" key={x.id}><div className="suggestion-main"><div className="suggestion-meta"><strong>{x.studentName||x.name||'학생'}</strong><span>{formatCreatedAt(x.createdAt)}</span></div><p>{group.label(x)}</p></div><div className="admin-actions"><button className="small-action" onClick={()=>editItem(x)}>수정</button><button className="danger-btn" onClick={()=>removeItem(x)}>삭제</button></div></div>)}</div>:<Empty text="등록된 게시물이 없어요."/>}</div>
 }
 
 function TeacherClassPoints(){
@@ -465,33 +544,23 @@ function formatCreatedAt(value){
 function TeacherVote(){
   const [items,setItems]=useState([]);
   const [loading,setLoading]=useState(true);
-  useEffect(()=>{
-    const q=query(collection(db,'voteSuggestions'),orderBy('createdAt','desc'));
-    return onSnapshot(q,s=>{
-      setItems(s.docs.map(d=>({id:d.id,...d.data()})));
-      setLoading(false);
-    },err=>{console.error(err);setLoading(false);});
-  },[]);
+  useEffect(()=>{const q=query(collection(db,'voteSuggestions'),orderBy('createdAt','desc'));return onSnapshot(q,s=>{setItems(s.docs.map(d=>({id:d.id,...d.data()})));setLoading(false)},err=>{console.error(err);setLoading(false)})},[]);
   const markDone=async item=>updateDoc(doc(db,'voteSuggestions',item.id),{status:item.status==='done'?'new':'done'});
-  return <div className="teacher-card"><div className="teacher-section-head"><div><h2>🗳️ 투표 관리</h2><p>학생이 제안하면 이 화면에 실시간으로 표시됩니다.</p></div><span className="live-badge">● 실시간</span></div>
-    {loading?<div className="empty-card">불러오는 중...</div>:items.length===0?<Empty text="아직 들어온 투표 안건 제안이 없어요."/>:<div className="teacher-suggestion-list">{items.map(x=><div className={`teacher-suggestion-item ${x.status==='done'?'done':''}`} key={x.id}><div className="suggestion-main"><div className="suggestion-meta"><strong>{x.studentName||'학생'}</strong><span>{formatCreatedAt(x.createdAt)}</span></div><p>{x.text}</p></div><button className="small-action" onClick={()=>markDone(x)}>{x.status==='done'?'다시 보기':'확인 완료'}</button></div>)}</div>}
-  </div>
+  const editItem=async item=>{const text=window.prompt('투표 안건 내용을 수정하세요.',item.text||'');if(text===null||!text.trim())return;await updateDoc(doc(db,'voteSuggestions',item.id),{text:text.trim()})};
+  const removeItem=async item=>{if(!window.confirm('이 투표 안건 제안을 삭제할까요?'))return;await deleteDoc(doc(db,'voteSuggestions',item.id))};
+  const addItem=async()=>{const text=window.prompt('교사가 새 투표 안건을 추가합니다.');if(!text?.trim())return;await addDoc(collection(db,'voteSuggestions'),{uid:auth.currentUser.uid,studentName:'선생님',text:text.trim(),status:'new',createdAt:serverTimestamp()})};
+  return <div className="teacher-card"><div className="teacher-section-head"><div><h2>🗳️ 투표 관리</h2><p>학생 제안을 실시간으로 확인하고 추가·수정·삭제할 수 있습니다.</p></div><button className="primary-action" onClick={addItem}>+ 안건 추가</button></div>{loading?<div className="empty-card">불러오는 중...</div>:items.length===0?<Empty text="아직 들어온 투표 안건 제안이 없어요."/>:<div className="teacher-suggestion-list">{items.map(x=><div className={`teacher-suggestion-item ${x.status==='done'?'done':''}`} key={x.id}><div className="suggestion-main"><div className="suggestion-meta"><strong>{x.studentName||'학생'}</strong><span>{formatCreatedAt(x.createdAt)}</span></div><p>{x.text}</p></div><div className="admin-actions"><button className="small-action" onClick={()=>markDone(x)}>{x.status==='done'?'다시 보기':'확인 완료'}</button><button className="small-action" onClick={()=>editItem(x)}>수정</button><button className="danger-btn" onClick={()=>removeItem(x)}>삭제</button></div></div>)}</div>}</div>
 }
 
 function TeacherSuggestions(){
   const [items,setItems]=useState([]);
   const [loading,setLoading]=useState(true);
-  useEffect(()=>{
-    const q=query(collection(db,'couponSuggestions'),orderBy('createdAt','desc'));
-    return onSnapshot(q,s=>{
-      setItems(s.docs.map(d=>({id:d.id,...d.data()})));
-      setLoading(false);
-    },err=>{console.error(err);setLoading(false);});
-  },[]);
+  useEffect(()=>{const q=query(collection(db,'couponSuggestions'),orderBy('createdAt','desc'));return onSnapshot(q,s=>{setItems(s.docs.map(d=>({id:d.id,...d.data()})));setLoading(false)},err=>{console.error(err);setLoading(false)})},[]);
   const markDone=async item=>updateDoc(doc(db,'couponSuggestions',item.id),{status:item.status==='done'?'new':'done'});
-  return <div className="teacher-card"><div className="teacher-section-head"><div><h2>💡 쿠폰 건의함</h2><p>학생이 쿠폰을 제안하면 이 화면에 실시간으로 표시됩니다.</p></div><span className="live-badge">● 실시간</span></div>
-    {loading?<div className="empty-card">불러오는 중...</div>:items.length===0?<Empty text="아직 들어온 쿠폰 아이디어가 없어요."/>:<div className="teacher-suggestion-list">{items.map(x=><div className={`teacher-suggestion-item ${x.status==='done'?'done':''}`} key={x.id}><div className="suggestion-main"><div className="suggestion-meta"><strong>{x.studentName||'학생'}</strong><span>{formatCreatedAt(x.createdAt)}</span></div><p>{x.text}</p></div><button className="small-action" onClick={()=>markDone(x)}>{x.status==='done'?'다시 보기':'확인 완료'}</button></div>)}</div>}
-  </div>
+  const editItem=async item=>{const text=window.prompt('쿠폰 아이디어를 수정하세요.',item.text||'');if(text===null||!text.trim())return;await updateDoc(doc(db,'couponSuggestions',item.id),{text:text.trim()})};
+  const removeItem=async item=>{if(!window.confirm('이 쿠폰 아이디어를 삭제할까요?'))return;await deleteDoc(doc(db,'couponSuggestions',item.id))};
+  const addItem=async()=>{const text=window.prompt('교사가 새 쿠폰 아이디어를 추가합니다.');if(!text?.trim())return;await addDoc(collection(db,'couponSuggestions'),{uid:auth.currentUser.uid,studentName:'선생님',text:text.trim(),status:'new',createdAt:serverTimestamp()})};
+  return <div className="teacher-card"><div className="teacher-section-head"><div><h2>💡 쿠폰 건의함</h2><p>학생 아이디어를 실시간으로 확인하고 추가·수정·삭제할 수 있습니다.</p></div><button className="primary-action" onClick={addItem}>+ 아이디어 추가</button></div>{loading?<div className="empty-card">불러오는 중...</div>:items.length===0?<Empty text="아직 들어온 쿠폰 아이디어가 없어요."/>:<div className="teacher-suggestion-list">{items.map(x=><div className={`teacher-suggestion-item ${x.status==='done'?'done':''}`} key={x.id}><div className="suggestion-main"><div className="suggestion-meta"><strong>{x.studentName||'학생'}</strong><span>{formatCreatedAt(x.createdAt)}</span></div><p>{x.text}</p></div><div className="admin-actions"><button className="small-action" onClick={()=>markDone(x)}>{x.status==='done'?'다시 보기':'확인 완료'}</button><button className="small-action" onClick={()=>editItem(x)}>수정</button><button className="danger-btn" onClick={()=>removeItem(x)}>삭제</button></div></div>)}</div>}</div>
 }
 
 function Empty({text}){return <div className="empty-card">🌿<p>{text}</p></div>}
