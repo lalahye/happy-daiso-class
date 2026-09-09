@@ -393,7 +393,7 @@ function ClassPoints({points,setPoints,classPoint}){
         nextBalance=current-n;
         tx.update(userRef,{points:nextBalance});
         tx.set(contributionRef,{uid,studentName:auth.currentUser.displayName||'학생',amount:n,roundId:classPoint.rewardRoundId||1,createdAt:serverTimestamp()});
-        tx.set(txRef,{uid,amount:-n,reason:'우리 반 포인트 적립',balanceAfter:nextBalance,createdAt:serverTimestamp()});
+        tx.set(txRef,{uid,amount:-n,reason:'우리 반 포인트 적립',balanceAfter:nextBalance,classPointContributionId:contributionRef.id,classPointRoundId:classPoint.rewardRoundId||1,createdAt:serverTimestamp()});
       });
       setPoints(nextBalance);alert(`${n}P를 우리 반에 적립했어요! 🌱`);
     }catch(e){console.error(e);alert(e.message||'적립 중 오류가 발생했어요.');}finally{setBusy(false)}
@@ -693,12 +693,36 @@ function TeacherPointManager(){
   };
   const reverse=async t=>{
     if(!t.amount)return;
-    if(!window.confirm(`이 내역을 반대로 조정할까요?\n${t.amount>0?'+':''}${t.amount}P → ${-t.amount>0?'+':''}${-t.amount}P`))return;
+    const isClassPointContribution=t.reason==='우리 반 포인트 적립';
+    const extraNotice=isClassPointContribution?'\n우리 반 포인트에서도 같은 만큼 차감됩니다.':'';
+    if(!window.confirm(`이 내역을 반대로 조정할까요?\n${t.amount>0?'+':''}${t.amount}P → ${-t.amount>0?'+':''}${-t.amount}P${extraNotice}`))return;
     const u=users.find(x=>x.id===t.uid);
     if(!u)return alert('해당 학생 계정을 찾을 수 없습니다.');
     try{
-      const result=await applyTeacherPointChange(u,-Number(t.amount),`교사 내역 취소 · ${t.reason||'포인트 내역'}`,{reversesTransactionId:t.id});
-      alert(`${u.name||u.email||'학생'} 포인트를 ${result.before}P → ${result.next}P로 바로 반영했습니다.`);
+      if(isClassPointContribution){
+        const userRef=doc(db,'users',u.id);
+        const logRef=doc(collection(db,'pointTransactions'));
+        const classRef=doc(collection(db,'classPointContributions'));
+        const settingsRef=doc(db,'classSettings','main');
+        let before=0,next=0,applied=0,classDeduct=0;
+        await runTransaction(db,async tx=>{
+          const [userSnap,settingsSnap]=await Promise.all([tx.get(userRef),tx.get(settingsRef)]);
+          if(!userSnap.exists())throw new Error('학생 계정 문서를 찾을 수 없습니다.');
+          before=Number(userSnap.data().points)||0;
+          const refund=Math.abs(Number(t.amount)||0);
+          next=before+refund;
+          applied=refund;
+          classDeduct=-refund;
+          const roundId=Number(t.classPointRoundId)||Number(settingsSnap.data()?.rewardRoundId)||1;
+          tx.update(userRef,{points:next});
+          tx.set(logRef,{uid:u.id,amount:applied,reason:`교사 내역 취소 · ${t.reason||'포인트 내역'}`,balanceAfter:next,createdAt:serverTimestamp(),adjustedBy:auth.currentUser.uid,reversesTransactionId:t.id});
+          tx.set(classRef,{uid:u.id,studentName:u.name||u.email||'학생',amount:classDeduct,roundId,reason:'우리 반 포인트 적립 취소',type:'teacherContributionReversal',reversesTransactionId:t.id,createdAt:serverTimestamp(),adjustedBy:auth.currentUser.uid});
+        });
+        alert(`${u.name||u.email||'학생'}에게 ${applied}P를 반환하고, 우리 반 포인트에서도 ${Math.abs(classDeduct)}P를 차감했습니다.`);
+      }else{
+        const result=await applyTeacherPointChange(u,-Number(t.amount),`교사 내역 취소 · ${t.reason||'포인트 내역'}`,{reversesTransactionId:t.id});
+        alert(`${u.name||u.email||'학생'} 포인트를 ${result.before}P → ${result.next}P로 바로 반영했습니다.`);
+      }
     }catch(err){console.error('내역 취소 오류',err);alert(`내역 취소에 실패했습니다.\n${err.message||err}`);}
   };
   const filtered=selectedUid?transactions.filter(t=>t.uid===selectedUid):transactions;
