@@ -2,8 +2,7 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function myUserDoc() { return get(/databases/$(database)/documents/users/$(request.auth.uid)); }
-    function isTeacher() { return signedIn() && myUserDoc().data.role == 'teacher'; }
+    function isTeacher() { return signedIn() && request.auth.uid == 'pyE3U5Ra0SRuK6WLzHQFflPyUZB3'; }
 
     match /users/{uid} {
       allow read: if signedIn() && (request.auth.uid == uid || isTeacher());
@@ -75,31 +74,10 @@ service cloud.firestore {
       allow update, delete: if isTeacher();
     }
 
-    // 교사는 학생 users 문서를 직접 수정하지 않고 조정 요청을 남깁니다.
-    // 학생 앱이 자신의 users 문서에 조정값을 반영하므로 교사→학생 문서 쓰기 403을 피합니다.
+    // 이전 버전의 포인트 조정 대기열. 새 요청은 만들지 않습니다.
     match /teacherPointAdjustments/{id} {
-      allow create: if signedIn()
-        && request.resource.data.teacherUid == request.auth.uid
-        && request.resource.data.uid is string
-        && request.resource.data.amount is int
-        && request.resource.data.amount != 0
-        && request.resource.data.status == 'pending';
-
-      allow read: if signedIn()
-        && (resource.data.uid == request.auth.uid
-          || resource.data.teacherUid == request.auth.uid
-          || isTeacher());
-
-      allow update: if signedIn()
-        && resource.data.uid == request.auth.uid
-        && request.resource.data.uid == resource.data.uid
-        && request.resource.data.teacherUid == resource.data.teacherUid
-        && request.resource.data.amount == resource.data.amount
-        && request.resource.data.reason == resource.data.reason
-        && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['status','balanceAfter','appliedAt']);
-
-      allow delete: if isTeacher();
+      allow read, delete: if isTeacher();
+      allow create, update: if false;
     }
 
     match /classPointContributions/{id} {
