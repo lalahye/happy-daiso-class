@@ -199,34 +199,8 @@ function StudentApp({profile}){
 
   useEffect(()=>onSnapshot(doc(db,'users',auth.currentUser.uid),snap=>{if(snap.exists())setPoints(Number(snap.data().points)||0)}),[]);
 
-  // 교사 포인트 조정은 학생 앱이 자기 문서에 직접 반영합니다.
-  // 교사가 학생 문서를 직접 수정하지 않으므로 교사→학생 users 쓰기 권한 오류를 피합니다.
-  useEffect(()=>{
-    const uid=auth.currentUser.uid;
-    const q=query(collection(db,'teacherPointAdjustments'),where('uid','==',uid));
-    const stop=onSnapshot(q,snap=>{
-      snap.docs.filter(d=>d.data().status==='pending').forEach(async d=>{
-        const adjRef=doc(db,'teacherPointAdjustments',d.id);
-        const userRef=doc(db,'users',uid);
-        const logRef=doc(collection(db,'pointTransactions'));
-        try{
-          await runTransaction(db,async tx=>{
-            const [adjSnap,userSnap]=await Promise.all([tx.get(adjRef),tx.get(userRef)]);
-            if(!adjSnap.exists()||adjSnap.data().status!=='pending'||!userSnap.exists())return;
-            const adj=adjSnap.data();
-            const current=Number(userSnap.data().points)||0;
-            const requested=Math.trunc(Number(adj.amount)||0);
-            const next=Math.max(0,current+requested);
-            const appliedAmount=next-current;
-            tx.update(userRef,{points:next});
-            tx.update(adjRef,{status:'applied',balanceAfter:next,appliedAt:serverTimestamp()});
-            tx.set(logRef,{uid,amount:appliedAmount,reason:adj.reason||'교사 포인트 조정',balanceAfter:next,createdAt:serverTimestamp(),adjustedBy:adj.teacherUid||''});
-          });
-        }catch(err){console.error('교사 포인트 조정 반영 오류',err);}
-      });
-    },err=>console.error('포인트 조정 수신 오류',err));
-    return ()=>stop();
-  },[]);
+  // 교사 포인트 조정은 교사 화면에서 학생 users 문서에 즉시 반영합니다.
+  // 이전 teacherPointAdjustments 대기열은 더 이상 사용하지 않습니다.
 
   const addPoints=async (n,reason='포인트 적립')=>{
     const uid=auth.currentUser.uid,userRef=doc(db,'users',uid),txRef=doc(collection(db,'pointTransactions'));
@@ -686,6 +660,21 @@ function TeacherContentManager(){
 function TeacherPointManager(){
   const [users,setUsers]=useState([]),[transactions,setTransactions]=useState([]),[selectedUid,setSelectedUid]=useState('');
   useEffect(()=>{const a=onSnapshot(collection(db,'users'),snap=>setUsers(snap.docs.map(d=>({id:d.id,...d.data()})).filter(x=>x.role!=='teacher').sort((a,b)=>(a.name||a.email||'').localeCompare(b.name||b.email||'','ko'))));const b=onSnapshot(collection(db,'pointTransactions'),snap=>{const rows=snap.docs.map(d=>({id:d.id,...d.data()}));rows.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));setTransactions(rows)});return()=>{a();b()}},[]);
+  const applyTeacherPointChange=async(u,amount,reason,extra={})=>{
+    const userRef=doc(db,'users',u.id);
+    const logRef=doc(collection(db,'pointTransactions'));
+    let before=0,next=0,applied=0;
+    await runTransaction(db,async tx=>{
+      const userSnap=await tx.get(userRef);
+      if(!userSnap.exists())throw new Error('학생 계정 문서를 찾을 수 없습니다.');
+      before=Number(userSnap.data().points)||0;
+      next=Math.max(0,before+Number(amount));
+      applied=next-before;
+      tx.update(userRef,{points:next});
+      tx.set(logRef,{uid:u.id,amount:applied,reason,balanceAfter:next,createdAt:serverTimestamp(),adjustedBy:auth.currentUser.uid,...extra});
+    });
+    return {before,next,applied};
+  };
   const requestAdjustment=async(u,kind)=>{
     const label=u.name||u.email||'학생';
     const raw=window.prompt(`${label}에게 ${kind==='add'?'적립':'차감'}할 포인트를 입력하세요.\n(양수만 입력)`, '1');
@@ -695,24 +684,25 @@ function TeacherPointManager(){
     const reason=window.prompt('조정 사유를 입력해주세요.',kind==='add'?'교사 포인트 적립':'교사 포인트 차감');
     if(reason===null||!reason.trim())return;
     try{
-      await addDoc(collection(db,'teacherPointAdjustments'),{uid:u.id,studentName:label,amount:kind==='add'?n:-n,reason:reason.trim(),status:'pending',teacherUid:auth.currentUser.uid,createdAt:serverTimestamp()});
-      alert(`${label} ${kind==='add'?'+':'-'}${n}P 조정 요청을 저장했습니다.\n학생 앱이 열려 있으면 즉시, 닫혀 있으면 다음 로그인 때 실제 포인트에 반영됩니다.`);
+      const result=await applyTeacherPointChange(u,kind==='add'?n:-n,reason.trim());
+      alert(`${label} 포인트를 ${result.before}P → ${result.next}P로 바로 반영했습니다.`);
     }catch(err){
-      console.error('교사 포인트 조정 요청 오류',err);
-      alert(`포인트 ${kind==='add'?'적립':'차감'} 요청에 실패했습니다.\n${err.message||err}`);
+      console.error('교사 포인트 조정 오류',err);
+      alert(`포인트 ${kind==='add'?'적립':'차감'}에 실패했습니다.\n${err.message||err}`);
     }
   };
   const reverse=async t=>{
     if(!t.amount)return;
     if(!window.confirm(`이 내역을 반대로 조정할까요?\n${t.amount>0?'+':''}${t.amount}P → ${-t.amount>0?'+':''}${-t.amount}P`))return;
     const u=users.find(x=>x.id===t.uid);
+    if(!u)return alert('해당 학생 계정을 찾을 수 없습니다.');
     try{
-      await addDoc(collection(db,'teacherPointAdjustments'),{uid:t.uid,studentName:u?.name||u?.email||'학생',amount:-Number(t.amount),reason:`교사 내역 취소 · ${t.reason||'포인트 내역'}`,status:'pending',teacherUid:auth.currentUser.uid,reversesTransactionId:t.id,createdAt:serverTimestamp()});
-      alert('반대 조정 요청을 저장했습니다.');
-    }catch(err){console.error('내역 취소 요청 오류',err);alert(`내역 취소 요청에 실패했습니다.\n${err.message||err}`);}
+      const result=await applyTeacherPointChange(u,-Number(t.amount),`교사 내역 취소 · ${t.reason||'포인트 내역'}`,{reversesTransactionId:t.id});
+      alert(`${u.name||u.email||'학생'} 포인트를 ${result.before}P → ${result.next}P로 바로 반영했습니다.`);
+    }catch(err){console.error('내역 취소 오류',err);alert(`내역 취소에 실패했습니다.\n${err.message||err}`);}
   };
   const filtered=selectedUid?transactions.filter(t=>t.uid===selectedUid):transactions;
-  return <div className="teacher-classpoint-grid"><div className="teacher-card"><div className="teacher-section-head"><div><h2>💰 학생 개인 포인트 관리</h2><p>적립과 차감을 따로 눌러 조정합니다. 학생 앱이 열려 있으면 실제 포인트에 실시간 반영됩니다.</p></div><span className="live-badge">● 실시간</span></div><div className="point-student-grid">{users.map(u=><div className="point-student-card" key={u.id}><div><strong>{u.name||u.email||'학생'}</strong><span>{Number(u.points||0)}P</span></div><div className="admin-actions"><button className="small-action" onClick={()=>requestAdjustment(u,'add')}>＋ 적립</button><button className="danger-btn" onClick={()=>requestAdjustment(u,'deduct')}>－ 차감</button></div></div>)}</div></div><div className="teacher-card"><div className="teacher-section-head"><div><h2>🧾 포인트 내역</h2><p>잘못된 내역은 삭제하지 않고 반대 금액을 새로 반영합니다.</p></div><select value={selectedUid} onChange={e=>setSelectedUid(e.target.value)}><option value="">전체 학생</option>{users.map(u=><option key={u.id} value={u.id}>{u.name||u.email||'학생'}</option>)}</select></div>{filtered.length?<div className="teacher-suggestion-list">{filtered.slice(0,200).map(t=>{const u=users.find(x=>x.id===t.uid);return <div className="teacher-suggestion-item" key={t.id}><div className="suggestion-main"><div className="suggestion-meta"><strong>{u?.name||u?.email||t.uid||'학생'}</strong><span>{formatCreatedAt(t.createdAt)}</span></div><p>{t.reason||'포인트 내역'} · 잔액 {Number(t.balanceAfter||0)}P</p></div><div className="point-history-admin"><b className={Number(t.amount)>=0?'plus':'minus'}>{Number(t.amount)>0?'+':''}{Number(t.amount)}P</b><button className="small-action" onClick={()=>reverse(t)}>이 내역 취소</button></div></div>})}</div>:<Empty text="포인트 내역이 없어요."/>}</div></div>;
+  return <div className="teacher-classpoint-grid"><div className="teacher-card"><div className="teacher-section-head"><div><h2>💰 학생 개인 포인트 관리</h2><p>적립과 차감을 누르면 학생의 실제 포인트에 즉시 반영됩니다.</p></div><span className="live-badge">● 실시간</span></div><div className="point-student-grid">{users.map(u=><div className="point-student-card" key={u.id}><div><strong>{u.name||u.email||'학생'}</strong><span>{Number(u.points||0)}P</span></div><div className="admin-actions"><button className="small-action" onClick={()=>requestAdjustment(u,'add')}>＋ 적립</button><button className="danger-btn" onClick={()=>requestAdjustment(u,'deduct')}>－ 차감</button></div></div>)}</div></div><div className="teacher-card"><div className="teacher-section-head"><div><h2>🧾 포인트 내역</h2><p>잘못된 내역은 삭제하지 않고 반대 금액을 새로 반영합니다.</p></div><select value={selectedUid} onChange={e=>setSelectedUid(e.target.value)}><option value="">전체 학생</option>{users.map(u=><option key={u.id} value={u.id}>{u.name||u.email||'학생'}</option>)}</select></div>{filtered.length?<div className="teacher-suggestion-list">{filtered.slice(0,200).map(t=>{const u=users.find(x=>x.id===t.uid);return <div className="teacher-suggestion-item" key={t.id}><div className="suggestion-main"><div className="suggestion-meta"><strong>{u?.name||u?.email||t.uid||'학생'}</strong><span>{formatCreatedAt(t.createdAt)}</span></div><p>{t.reason||'포인트 내역'} · 잔액 {Number(t.balanceAfter||0)}P</p></div><div className="point-history-admin"><b className={Number(t.amount)>=0?'plus':'minus'}>{Number(t.amount)>0?'+':''}{Number(t.amount)}P</b><button className="small-action" onClick={()=>reverse(t)}>이 내역 취소</button></div></div>})}</div>:<Empty text="포인트 내역이 없어요."/>}</div></div>;
 }
 
 function TeacherClassPoints(){
