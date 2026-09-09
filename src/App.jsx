@@ -541,38 +541,38 @@ function StudentApp({profile}){
     let alreadyCompleted=false,awarded=false,next=points;
 
     await runTransaction(db,async tx=>{
-      // 오늘 응시 기록과 기존 하루 보상 기록을 둘 다 확인합니다.
-      // 둘 중 하나라도 있으면 오늘 퀴즈는 다시 제출할 수 없습니다.
       const [attemptSnap,legacySnap,userSnap]=await Promise.all([
         tx.get(attemptRef),
         tx.get(legacyRewardRef),
         tx.get(userRef)
       ]);
 
-      if(attemptSnap.exists() || legacySnap.exists()){
+      // 예전 버전에서 오답 응시 기록이 남아 있어도 5/5가 아니면 다시 풀 수 있습니다.
+      const attemptPerfect=attemptSnap.exists() && Number(attemptSnap.data()?.score)===5;
+      if(attemptPerfect || legacySnap.exists()){
         alreadyCompleted=true;
         return;
       }
 
-      // 채점 결과와 관계없이 '오늘 1회 응시 완료'를 먼저 영구 저장합니다.
-      tx.set(attemptRef,{
-        uid,date,score,completed:true,points:score===5?3:0,createdAt:serverTimestamp()
-      });
+      // 5문제를 모두 맞혔을 때만 오늘의 퀴즈를 완료 처리하고 +3P를 지급합니다.
+      // 오답이 있으면 아무 기록도 잠그지 않아 바로 다시 풀 수 있습니다.
+      if(Number(score)!==5)return;
 
-      if(score===5){
-        const current=Number(userSnap.data()?.points)||0;
-        next=current+3;
-        tx.update(userRef,{points:next});
-        tx.set(txRef,{
-          uid,amount:3,reason:'퀴즈방 하루 1회 보상',balanceAfter:next,
-          quizDate:date,createdAt:serverTimestamp()
-        });
-        awarded=true;
-      }
+      const current=Number(userSnap.data()?.points)||0;
+      next=current+3;
+      tx.set(attemptRef,{
+        uid,date,score:5,completed:true,points:3,createdAt:serverTimestamp()
+      });
+      tx.update(userRef,{points:next});
+      tx.set(txRef,{
+        uid,amount:3,reason:'퀴즈방 5문제 모두 정답',balanceAfter:next,
+        quizDate:date,createdAt:serverTimestamp()
+      });
+      awarded=true;
     });
 
     if(awarded)setPoints(next);
-    return {alreadyCompleted,awarded};
+    return {alreadyCompleted,awarded,needsRetry:!alreadyCompleted&&!awarded};
   };
 
   const saveAvatar=async(nextAvatar)=>{
@@ -597,7 +597,7 @@ function StudentApp({profile}){
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><ClassLogo size={44} onClick={()=>setLogoOpen(true)}/><div><strong>행복한 다이소반</strong><span>4학년 1반</span></div></div>
+      <div className="brand"><ClassLogo size={44} onClick={()=>setLogoOpen(true)}/><div style={{minWidth:0}}><strong style={{whiteSpace:'nowrap',fontSize:17,letterSpacing:'-0.5px'}}>행복한 다이소반</strong><span>4학년 1반</span></div></div>
       <nav>{MENU.map(([key,icon,label])=><button key={key} className={page===key?'active':''} onClick={()=>setPage(key)}>
         <span className="nav-icon">{icon}</span><span>{label}</span>
       </button>)}</nav>
@@ -755,6 +755,7 @@ function Voice(){
 
 function Study(){
  const [items,setItems]=useState([]),[answers,setAnswers]=useState({}),[results,setResults]=useState({}),[rewarded,setRewarded]=useState({});
+ const [openWorksheetId,setOpenWorksheetId]=useState(null);
  useEffect(()=>onSnapshot(collection(db,'worksheets'),x=>setItems(x.docs.map(d=>({id:d.id,...d.data()})).filter(w=>w.published!==false))),[]);
  const norm=v=>(v||'').trim().replace(/\s+/g,' ').replace(/[–—]/g,'-').toLowerCase();
  const grade=async w=>{
@@ -829,7 +830,7 @@ function Study(){
      alert(`채점 또는 포인트 적립에 실패했습니다.\n${err.message||err}`);
    }
  };
- return <><PageHead title="학습방"/><div className="study-motivation"><div className="study-motivation-icon">🔥</div><div><strong>문제집 풀고 포인트 받자!</strong><span>선생님이 정한 목표 문제 수 이상 맞히면 <b>5P 적립!</b></span><small>문제지마다 5P는 딱 한 번만 받을 수 있어요. 새 문제지가 올라오면 다시 도전!</small></div></div><div className="study-help">📌 PDF를 열어 푼 뒤 각 번호의 답을 입력하고 <b>전체 채점하기</b>를 눌러요.</div><div className="list-stack">{items.length?items.map(w=>{const key=w.answers||[],graded=results[w.id]||[],threshold=Math.max(1,Math.min(key.length||1,Number(w.rewardThreshold)||key.length||1));return <div className="worksheet-card" key={w.id}><div className="worksheet-head"><div className="file-icon">📄</div><div className="grow"><strong>{w.title}</strong><span>{key.length||w.questionCount||0}문제 · 자동 채점</span></div>{w.pdfUrl&&<a className="outline-btn" href={w.pdfUrl} target="_blank" rel="noreferrer">PDF 열기</a>}</div><div className="worksheet-reward-banner">🎯 <b>{threshold}문제 이상 정답이면 +5P</b><span>{rewarded[w.id]?' · 보상 획득 완료 ✓':''}</span></div><div className="student-answer-grid">{key.map(a=>{const r=graded.find(x=>x.no===a.no);return <label className={`student-answer-item ${r?r.correct?'correct':'wrong':''}`} key={a.no}><span>{a.no}번</span><input value={(answers[w.id]||{})[a.no]||''} onChange={e=>setAnswers({...answers,[w.id]:{...(answers[w.id]||{}),[a.no]:e.target.value}})} placeholder="정답 입력"/><i>{r?(r.correct?'✓ 정답':'✕ 오답'):''}</i></label>})}</div><button className="primary-wide" disabled={!key.length} onClick={()=>grade(w)}>전체 채점하기</button></div>}):<Empty text="선생님이 올린 학습지가 아직 없어요."/>}</div></>;
+ return <><PageHead title="학습방"/><div className="study-motivation"><div className="study-motivation-icon">🔥</div><div><strong>문제집 풀고 포인트 받자!</strong><span>선생님이 정한 목표 문제 수 이상 맞히면 <b>5P 적립!</b></span><small>문제지마다 5P는 딱 한 번만 받을 수 있어요. 이미 보상을 받은 문제지는 다시 풀어도 추가 적립되지 않아요.</small></div></div><div className="study-help">📌 풀 문제지를 선택하면 정답 입력칸이 열려요. 한 번에 하나의 문제지만 펼쳐집니다.</div><div className="list-stack">{items.length?items.map(w=>{const key=w.answers||[],graded=results[w.id]||[],threshold=Math.max(1,Math.min(key.length||1,Number(w.rewardThreshold)||key.length||1));const isOpen=openWorksheetId===w.id;const done=!!rewarded[w.id];return <div className={`worksheet-card ${isOpen?'open':''}`} key={w.id}><button type="button" className="worksheet-accordion-head" onClick={()=>setOpenWorksheetId(isOpen?null:w.id)} style={{width:'100%',border:0,background:'transparent',padding:0,textAlign:'left',cursor:'pointer'}}><div className="worksheet-head"><div className="file-icon">{done?'✅':'📄'}</div><div className="grow"><strong>{w.title}</strong><span>{key.length||w.questionCount||0}문제 · 자동 채점 {done?'· +5P 적립 완료':''}</span></div><span style={{fontWeight:900,fontSize:22,color:'#6d4aff'}}>{isOpen?'⌃':'⌄'}</span></div><div className="worksheet-reward-banner">🎯 <b>{threshold}문제 이상 정답이면 +5P</b><span>{done?' · 보상 획득 완료 ✓':''}</span></div></button>{isOpen&&<div className="worksheet-accordion-body">{w.pdfUrl&&<div style={{display:'flex',justifyContent:'flex-end',margin:'12px 0'}}><a className="outline-btn" href={w.pdfUrl} target="_blank" rel="noreferrer">PDF 열기</a></div>}<div className="student-answer-grid">{key.map(a=>{const r=graded.find(x=>x.no===a.no);return <label className={`student-answer-item ${r?r.correct?'correct':'wrong':''}`} key={a.no}><span>{a.no}번</span><input value={(answers[w.id]||{})[a.no]||''} onChange={e=>setAnswers({...answers,[w.id]:{...(answers[w.id]||{}),[a.no]:e.target.value}})} placeholder="정답 입력"/><i>{r?(r.correct?'✓ 정답':'✕ 오답'):''}</i></label>})}</div><button className="primary-wide" disabled={!key.length} onClick={()=>grade(w)}>전체 채점하기</button>{done&&<div style={{marginTop:10,textAlign:'center',fontWeight:800,color:'#6b7280'}}>✅ 이 문제지의 +5P는 이미 적립되었습니다. 다시 풀어도 포인트는 추가되지 않아요.</div>}</div>}</div>}):<Empty text="선생님이 올린 학습지가 아직 없어요."/>}</div></>;
 }
 
 function Quiz({claimReward}){
@@ -893,7 +894,7 @@ function Quiz({claimReward}){
 
     const unsub=onSnapshot(attemptRef,snap=>{
       if(!alive)return;
-      if(snap.exists()){
+      if(snap.exists() && Number(snap.data()?.score)===5){
         setCompletedToday(true);
         setTodayResult(snap.data());
       }else{
@@ -927,17 +928,26 @@ function Quiz({claimReward}){
   const finish=async()=>{
     if(!quiz || quiz.length!==5)return alert('오늘의 퀴즈를 불러오는 중이에요. 잠시 후 다시 눌러주세요.');
     if(Object.keys(selected).length<quiz.length)return alert('5문제를 모두 풀어야 채점할 수 있어요.');
-    const score=quiz.filter((x,i)=>selected[i]===x.answer).length;
+    const wrongIndexes=quiz.map((x,i)=>selected[i]===x.answer?null:i).filter(i=>i!==null);
+    const score=5-wrongIndexes.length;
     try{
       const result=await claimReward(score);
       if(result.alreadyCompleted){
         setCompletedToday(true);
-        return alert('오늘의 퀴즈는 이미 완료했어요. 내일 다시 도전해요 😊');
+        return alert('오늘의 퀴즈는 이미 5문제를 모두 맞혔어요. 내일 다시 도전해요 😊');
       }
-      setCompletedToday(true);
-      setTodayResult({score,points:result.awarded?3:0,date});
-      if(result.awarded)alert(`오늘의 퀴즈 ${score}/5 정답! +3P 적립 🎉\n오늘은 더 이상 퀴즈를 풀 수 없어요.`);
-      else alert(`오늘의 퀴즈 ${score}/5 정답이에요.\n오늘의 응시가 완료되었습니다. 내일 다시 도전해요 😊`);
+      if(result.awarded){
+        setCompletedToday(true);
+        setTodayResult({score:5,points:3,date});
+        return alert('오늘의 퀴즈 5/5 정답! +3P 적립 🎉\n오늘의 퀴즈를 완료했어요.');
+      }
+
+      // 맞힌 답은 그대로 두고, 틀린 문제의 선택만 지워 다시 풀게 합니다.
+      const keepCorrect={...selected};
+      wrongIndexes.forEach(i=>delete keepCorrect[i]);
+      setSelected(keepCorrect);
+      setIdx(wrongIndexes[0]??0);
+      alert(`${score}/5 정답이에요.\n틀린 ${wrongIndexes.length}문제만 다시 풀어보세요 😊\n5문제를 모두 맞히면 +3P가 적립돼요.`);
     }catch(err){
       console.error('퀴즈 완료/포인트 적립 오류',err);
       alert(`퀴즈 처리에 실패했습니다.\n${err.message||err}`);
@@ -946,10 +956,10 @@ function Quiz({claimReward}){
 
   if(completedToday===null || !quiz)return <><PageHead title="퀴즈방"/><div className="empty-card">오늘의 4학년 퀴즈를 준비하고 있어요...</div>{quizError&&<div className="warning-box">⚠️ {quizError}</div>}</>;
 
-  if(completedToday)return <><PageHead title="퀴즈방"/><div className="quiz-reward-banner">🏆 <b>오늘의 퀴즈를 이미 완료했어요!</b><span>{todayResult?.score!=null?`${todayResult.score}/5 정답${Number(todayResult.points)===3?' · +3P 획득 ✓':''}`:'오늘의 응시 완료 ✓'}</span></div><div className="empty-card"><b>오늘은 퀴즈를 다시 풀 수 없어요.</b><br/>내일은 새로운 4학년 퀴즈 5문제가 열려요 😊</div></>;
+  if(completedToday)return <><PageHead title="퀴즈방"/><div className="quiz-reward-banner">🏆 <b>오늘의 퀴즈를 이미 완료했어요!</b><span>{todayResult?.score!=null?`${todayResult.score}/5 정답${Number(todayResult.points)===3?' · +3P 획득 ✓':''}`:'오늘의 응시 완료 ✓'}</span></div><div className="empty-card"><b>오늘의 5문제를 모두 맞혀 완료했어요.</b><br/>내일은 새로운 4학년 퀴즈 5문제가 열려요 😊</div></>;
 
   const q=quiz[idx];
-  return <><PageHead title="퀴즈방"/><div className="quiz-reward-banner">🏆 <b>오늘 딱 한 번 도전! 5문제를 모두 맞히면 +3P</b><span>매일 국어·수학·사회·과학·영어에서 난이도가 섞인 새로운 5문제가 나와요.</span></div>{quizError&&<div className="warning-box">⚠️ {quizError}</div>}<div className="warning-box">⚠️ <b>친구에게 정답을 알려주지 않습니다.</b></div><div className="quiz-meta"><strong>4학년 오늘의 교과 퀴즈 · {date}</strong><span>{idx+1} / 5</span></div><div className="quiz-card"><span className="subject-pill">{q.subject}</span><h2>{q.q}</h2>{q.options.map(o=><label className={`quiz-option ${selected[idx]===o?'selected':''}`} key={o}><input type="radio" checked={selected[idx]===o} onChange={()=>setSelected({...selected,[idx]:o})}/>{o}</label>)}</div><button className="primary-wide" onClick={()=>idx<4?setIdx(idx+1):finish()}>{idx<4?'다음 문제':'채점하기'}</button></>;
+  return <><PageHead title="퀴즈방"/><div className="quiz-reward-banner">🏆 <b>틀리면 다시 도전! 5문제를 모두 맞히면 +3P</b><span>매일 국어·수학·사회·과학·영어에서 난이도가 섞인 새로운 5문제가 나와요.</span></div>{quizError&&<div className="warning-box">⚠️ {quizError}</div>}<div className="warning-box">⚠️ <b>친구에게 정답을 알려주지 않습니다.</b></div><div className="quiz-meta"><strong>4학년 오늘의 교과 퀴즈 · {date}</strong><span>{idx+1} / 5</span></div><div className="quiz-card"><span className="subject-pill">{q.subject}</span><h2>{q.q}</h2>{q.options.map(o=><label className={`quiz-option ${selected[idx]===o?'selected':''}`} key={o}><input type="radio" checked={selected[idx]===o} onChange={()=>setSelected({...selected,[idx]:o})}/>{o}</label>)}</div><button className="primary-wide" onClick={()=>idx<4?setIdx(idx+1):finish()}>{idx<4?'다음 문제':'채점하기'}</button></>;
 }
 
 function Gallery({onReward,points,setPoints}){
@@ -1085,9 +1095,15 @@ function TeacherContentManager(){
     {key:'selfCompliments',title:'🌱 나의 기록',fields:['text'],label:x=>`${x.date||''} · ${x.text||''}`},
     {key:'couponPurchases',title:'🎟️ 쿠폰 구매 요청',fields:['status'],label:x=>`${x.name||'쿠폰'} · ${x.price||0}P · ${x.status||''}`},
   ];
-  const [active,setActive]=useState('praises'),[items,setItems]=useState([]),[loading,setLoading]=useState(true);
+  const [active,setActive]=useState('praises'),[items,setItems]=useState([]),[loading,setLoading]=useState(true),[users,setUsers]=useState([]);
   const group=groups.find(g=>g.key===active)||groups[0];
+  useEffect(()=>onSnapshot(collection(db,'users'),snap=>setUsers(snap.docs.map(d=>({id:d.id,...d.data()})))),[]);
   useEffect(()=>{setLoading(true);const q=query(collection(db,active),orderBy('createdAt','desc'));return onSnapshot(q,s=>{setItems(s.docs.map(d=>({id:d.id,...d.data()})));setLoading(false)},()=>{onSnapshot(collection(db,active),s=>{setItems(s.docs.map(d=>({id:d.id,...d.data()})));setLoading(false)})})},[active]);
+  const getAuthor=x=>{
+    if(x.uid===auth.currentUser.uid)return {name:'선생님',email:auth.currentUser.email||''};
+    const u=users.find(v=>v.id===x.uid);
+    return {name:u?.name||u?.displayName||x.studentName||x.name||u?.email||'학생',email:u?.email||''};
+  };
   const editItem=async item=>{
     const patch={};
     for(const f of group.fields){const next=window.prompt(`${f==='text'?'내용':f==='title'?'제목':f==='link'?'링크':f==='toName'?'칭찬할 친구':f==='status'?'상태':f} 수정`,item[f]??'');if(next===null)return;patch[f]=next.trim();}
@@ -1115,7 +1131,7 @@ function TeacherContentManager(){
     else return alert('쿠폰 구매 요청은 학생이 구매할 때 생성됩니다.');
     alert('추가했습니다.');
   };
-  return <div className="teacher-card"><div className="teacher-section-head"><div><h2>🧰 게시물 통합 관리</h2><p>학생이 등록한 내용을 메뉴별로 확인하고 교사가 추가·수정·삭제할 수 있습니다.</p></div><button className="primary-action" onClick={addItem}>+ 새 게시물</button></div><div className="admin-subtabs">{groups.map(g=><button key={g.key} className={active===g.key?'active':''} onClick={()=>setActive(g.key)}>{g.title}</button>)}</div>{loading?<div className="empty-card">불러오는 중...</div>:items.length?<div className="teacher-suggestion-list">{items.map(x=><div className="teacher-suggestion-item" key={x.id}><div className="suggestion-main"><div className="suggestion-meta"><strong>{x.studentName||x.name||'학생'}</strong><span>{formatCreatedAt(x.createdAt)}</span></div><p>{group.label(x)}</p></div><div className="admin-actions"><button className="small-action" onClick={()=>editItem(x)}>수정</button><button className="danger-btn" onClick={()=>removeItem(x)}>삭제</button></div></div>)}</div>:<Empty text="등록된 게시물이 없어요."/>}</div>
+  return <div className="teacher-card"><div className="teacher-section-head"><div><h2>🧰 게시물 통합 관리</h2><p>학생 화면의 익명 여부와 관계없이 교사는 작성자를 확인할 수 있습니다.</p></div><button className="primary-action" onClick={addItem}>+ 새 게시물</button></div><div className="admin-subtabs">{groups.map(g=><button key={g.key} className={active===g.key?'active':''} onClick={()=>setActive(g.key)}>{g.title}</button>)}</div>{loading?<div className="empty-card">불러오는 중...</div>:items.length?<div className="teacher-suggestion-list">{items.map(x=>{const author=getAuthor(x);return <div className="teacher-suggestion-item" key={x.id}><div className="suggestion-main"><div className="suggestion-meta"><strong>{author.name}</strong>{x.anonymous&&<span style={{fontWeight:800,color:'#7c3aed'}}>학생 화면: 익명</span>}<span>{formatCreatedAt(x.createdAt)}</span></div>{author.email&&<div style={{fontSize:12,color:'#9ca3af',marginTop:2}}>작성자 계정: {author.email}</div>}<p>{group.label(x)}</p></div><div className="admin-actions"><button className="small-action" onClick={()=>editItem(x)}>수정</button><button className="danger-btn" onClick={()=>removeItem(x)}>삭제</button></div></div>})}</div>:<Empty text="등록된 게시물이 없어요."/>}</div>
 }
 
 function TeacherPointManager(){
