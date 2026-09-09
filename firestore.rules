@@ -11,9 +11,9 @@ service cloud.firestore {
         && request.auth.uid == uid
         && request.resource.data.role == 'student'
         && request.resource.data.points == 0;
-      allow update: if signedIn()
+      allow update: if isTeacher() || (signedIn()
         && request.auth.uid == uid
-        && request.resource.data.role == resource.data.role;
+        && request.resource.data.role == resource.data.role);
       allow delete: if isTeacher();
     }
 
@@ -45,7 +45,7 @@ service cloud.firestore {
 
     match /selfCompliments/{id} {
       allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
-      allow read, update, delete: if signedIn() && resource.data.uid == request.auth.uid;
+      allow read, update, delete: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
     }
 
     match /voteSuggestions/{id} {
@@ -71,16 +71,16 @@ service cloud.firestore {
 
 
     match /pointTransactions/{id} {
-      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow create: if isTeacher() || (signedIn() && request.resource.data.uid == request.auth.uid);
       allow read: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
     }
 
     match /classPointContributions/{id} {
-      allow create: if signedIn()
+      allow create: if isTeacher() || (signedIn()
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.amount is int
         && request.resource.data.amount > 0
-        && request.resource.data.amount <= 1000;
+        && request.resource.data.amount <= 1000);
       allow read: if signedIn();
       allow update, delete: if isTeacher();
     }
@@ -99,6 +99,13 @@ service cloud.firestore {
       allow create, update: if signedIn() && request.resource.data.uid == request.auth.uid;
       allow read: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
       allow delete: if isTeacher();
+    }
+
+
+    match /worksheetRewards/{id} {
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow update, delete: if isTeacher();
     }
 
     match /missionCompletions/{id} {
