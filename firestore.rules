@@ -1,14 +1,15 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
     function signedIn() {
       return request.auth != null;
     }
 
-    // 교사 계정은 Firebase Authentication의 Google 이메일로 직접 확인합니다.
+    // 교사 계정은 Firebase Authentication UID로 직접 확인
     function isTeacher() {
       return signedIn()
-        && request.auth.token.email == 'uncun0112@gmail.com';
+        && request.auth.uid == 'pyE3U5Ra0SRuK6WLzHQFflPyUZB3';
     }
 
     match /users/{uid} {
@@ -19,6 +20,8 @@ service cloud.firestore {
         && request.resource.data.role == 'student'
         && request.resource.data.points == 0;
 
+      // 교사는 모든 학생 문서 수정 가능
+      // 학생은 자기 문서만 수정 가능하며 role은 바꿀 수 없음
       allow update: if isTeacher() || (
         signedIn()
         && request.auth.uid == uid
