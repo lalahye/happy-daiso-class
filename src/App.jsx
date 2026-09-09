@@ -690,8 +690,13 @@ function TeacherPointManager(){
     if(kind==='deduct'&&n>Number(u.points||0))return alert(`현재 ${Number(u.points||0)}P보다 많이 차감할 수 없어요.`);
     const reason=window.prompt('사유를 입력해주세요.',kind==='add'?'교사 포인트 적립':'교사 포인트 차감');
     if(reason===null||!reason.trim())return;
-    await addDoc(collection(db,'teacherPointAdjustments'),{uid:u.id,studentName:label,amount:kind==='add'?n:-n,reason:reason.trim(),status:'pending',teacherUid:auth.currentUser.uid,createdAt:serverTimestamp()});
-    alert(`${label}에게 ${kind==='add'?'+':'-'}${n}P 조정을 보냈습니다.\n학생 화면이 열려 있으면 바로 반영되고, 닫혀 있으면 다음 로그인 때 자동 반영됩니다.`);
+    try{
+      await addDoc(collection(db,'teacherPointAdjustments'),{uid:u.id,studentName:label,amount:kind==='add'?n:-n,reason:reason.trim(),status:'pending',teacherUid:auth.currentUser.uid,createdAt:serverTimestamp()});
+      alert(`${label}에게 ${kind==='add'?'+':'-'}${n}P 조정을 보냈습니다.\n학생 화면이 열려 있으면 바로 반영되고, 닫혀 있으면 다음 로그인 때 자동 반영됩니다.`);
+    }catch(err){
+      console.error('교사 포인트 조정 요청 오류',err);
+      alert(`포인트 ${kind==='add'?'적립':'차감'} 요청에 실패했습니다.\n${err?.message||err}`);
+    }
   };
   const reverse=async t=>{
     if(!t.amount)return;
