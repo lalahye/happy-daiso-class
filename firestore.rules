@@ -2,8 +2,11 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function myUserDoc() { return get(/databases/$(database)/documents/users/$(request.auth.uid)); }
-    function isTeacher() { return signedIn() && myUserDoc().data.role == 'teacher'; }
+    // 교사 계정은 Firebase Authentication UID로 직접 확인합니다.
+    // Firestore users 문서를 다시 조회하지 않아 교사 권한 판정 오류를 피합니다.
+    function isTeacher() {
+      return signedIn() && request.auth.uid == 'pyE3U5Ra0SRuK6WLzHQFflPyUZB3';
+    }
 
     match /users/{uid} {
       allow read: if signedIn() && (request.auth.uid == uid || isTeacher());
