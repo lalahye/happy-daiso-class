@@ -3,7 +3,7 @@ import {
   onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut
 } from 'firebase/auth';
 import {
-  addDoc, collection, doc, getDoc, onSnapshot, orderBy, query,
+  addDoc, collection, doc, getDoc, getDocs, onSnapshot, orderBy, query,
   serverTimestamp, setDoc, updateDoc, where, runTransaction, deleteDoc
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
@@ -231,25 +231,32 @@ function StudentApp({profile}){
     return true;
   };
 
-  const claimQuizReward=async()=>{
+  const claimQuizReward=async(score)=>{
     const uid=auth.currentUser.uid;
     const date=localDateKey();
     const rewardRef=doc(db,'quizDailyRewards',`${uid}_${date}`);
     const userRef=doc(db,'users',uid);
     const txRef=doc(collection(db,'pointTransactions'));
-    let awarded=false,next=points;
+    let alreadyCompleted=false,awarded=false,next=points;
     await runTransaction(db,async tx=>{
+      // Firestore transaction은 모든 읽기를 쓰기보다 먼저 수행해야 합니다.
       const [rewardSnap,userSnap]=await Promise.all([tx.get(rewardRef),tx.get(userRef)]);
-      if(rewardSnap.exists())return;
-      const current=Number(userSnap.data()?.points)||0;
-      next=current+3;
-      tx.update(userRef,{points:next});
-      tx.set(rewardRef,{uid,date,points:3,createdAt:serverTimestamp()});
-      tx.set(txRef,{uid,amount:3,reason:'퀴즈방 하루 1회 보상',balanceAfter:next,createdAt:serverTimestamp()});
-      awarded=true;
+      if(rewardSnap.exists()){alreadyCompleted=true;return;}
+
+      // 퀴즈 결과와 관계없이 오늘의 1회 응시를 확정합니다.
+      // 따라서 퀴즈방을 나갔다 다시 들어와도 같은 날에는 다시 풀 수 없습니다.
+      tx.set(rewardRef,{uid,date,score,completed:true,points:score===5?3:0,createdAt:serverTimestamp()});
+
+      if(score===5){
+        const current=Number(userSnap.data()?.points)||0;
+        next=current+3;
+        tx.update(userRef,{points:next});
+        tx.set(txRef,{uid,amount:3,reason:'퀴즈방 하루 1회 보상',balanceAfter:next,createdAt:serverTimestamp()});
+        awarded=true;
+      }
     });
     if(awarded)setPoints(next);
-    return awarded;
+    return {alreadyCompleted,awarded};
   };
 
   const saveAvatar=async(nextAvatar)=>{
@@ -439,29 +446,69 @@ function Study(){
    const correctCount=detail.filter(x=>x.correct).length;
    const threshold=Math.max(1,Math.min(key.length,Number(w.rewardThreshold)||key.length));
    setResults(prev=>({...prev,[w.id]:detail}));
-   let earned=false;
+
    const uid=auth.currentUser.uid;
+   const rewardReason=`학습방 문제지 보상 · ${w.title}`;
    const subRef=doc(db,'worksheetSubmissions',`${w.id}_${uid}`);
    const rewardRef=doc(db,'worksheetRewards',`${w.id}_${uid}`);
    const userRef=doc(db,'users',uid);
    const txRef=doc(collection(db,'pointTransactions'));
+
+   let earned=false;
+   let alreadyRewarded=false;
+
    try{
+     // 예전 버전에서 보상표시 문서만 남고 실제 포인트 적립이 빠진 경우를 복구합니다.
+     // 실제 +5P 지급 이력이 있는지 포인트 내역을 기준으로 한 번 더 확인합니다.
+     const historySnap=await getDocs(query(collection(db,'pointTransactions'),where('uid','==',uid)));
+     const hasRewardLog=historySnap.docs.some(d=>{
+       const x=d.data();
+       return Number(x.amount)===5 && (x.worksheetId===w.id || x.reason===rewardReason);
+     });
+
      await runTransaction(db,async tx=>{
-       const rewardSnap=await tx.get(rewardRef);
-       const shouldReward=correctCount>=threshold&&!rewardSnap.exists();
-       const userSnap=shouldReward?await tx.get(userRef):null;
-       tx.set(subRef,{worksheetId:w.id,worksheetTitle:w.title,uid,studentName:auth.currentUser.displayName||'학생',answers:mine,results:detail,correctCount,total:key.length,rewardThreshold:threshold,rewarded5P:rewardSnap.exists()||shouldReward,updatedAt:serverTimestamp()},{merge:true});
+       // 모든 읽기를 쓰기보다 먼저 수행합니다.
+       const [rewardSnap,userSnap]=await Promise.all([tx.get(rewardRef),tx.get(userRef)]);
+       const shouldReward=correctCount>=threshold&&!hasRewardLog;
+       alreadyRewarded=correctCount>=threshold&&hasRewardLog;
+
+       tx.set(subRef,{
+         worksheetId:w.id,worksheetTitle:w.title,uid,
+         studentName:auth.currentUser.displayName||'학생',
+         answers:mine,results:detail,correctCount,total:key.length,
+         rewardThreshold:threshold,
+         rewarded5P:hasRewardLog||shouldReward,
+         updatedAt:serverTimestamp()
+       },{merge:true});
+
        if(shouldReward){
-         const current=Number(userSnap?.data()?.points)||0;
+         const current=Number(userSnap.data()?.points)||0;
          const next=current+5;
          tx.update(userRef,{points:next});
-         tx.set(rewardRef,{worksheetId:w.id,worksheetTitle:w.title,uid,points:5,createdAt:serverTimestamp()});
-         tx.set(txRef,{uid,amount:5,reason:`학습방 문제지 보상 · ${w.title}`,balanceAfter:next,createdAt:serverTimestamp()});
+
+         // 보상 문서가 없는 경우에만 새로 만듭니다.
+         // 예전 버전의 보상 문서가 이미 남아 있어도 실제 지급 이력이 없다면 +5P는 정상 복구됩니다.
+         if(!rewardSnap.exists()){
+           tx.set(rewardRef,{worksheetId:w.id,worksheetTitle:w.title,uid,points:5,credited:true,balanceAfter:next,createdAt:serverTimestamp()});
+         }
+
+         tx.set(txRef,{
+           uid,amount:5,worksheetId:w.id,worksheetTitle:w.title,
+           reason:rewardReason,balanceAfter:next,createdAt:serverTimestamp()
+         });
          earned=true;
        }
      });
-     if(earned)setRewarded(prev=>({...prev,[w.id]:true}));
-     alert(earned?`${key.length}문제 중 ${correctCount}문제 정답!\n🎉 목표 ${threshold}문제 이상 달성! +5P 적립됐어요!`:`${key.length}문제 중 ${correctCount}문제 정답!${correctCount>=threshold?'\n이미 이 문제지의 5P 보상을 받았어요.':`\n${threshold-correctCount}문제만 더 맞히면 +5P!`}`);
+
+     if(earned||alreadyRewarded)setRewarded(prev=>({...prev,[w.id]:true}));
+
+     if(earned){
+       alert(`${key.length}문제 중 ${correctCount}문제 정답!\n🎉 목표 ${threshold}문제 이상 달성! +5P가 실제 개인 포인트에 적립됐어요!`);
+     }else if(alreadyRewarded){
+       alert(`${key.length}문제 중 ${correctCount}문제 정답!\n이 문제지는 이미 +5P 지급 내역이 있어 추가 적립되지 않아요.`);
+     }else{
+       alert(`${key.length}문제 중 ${correctCount}문제 정답!\n${threshold-correctCount}문제만 더 맞히면 +5P!`);
+     }
    }catch(err){
      console.error('학습방 채점/포인트 적립 오류',err);
      alert(`채점 또는 포인트 적립에 실패했습니다.\n${err.message||err}`);
@@ -471,25 +518,52 @@ function Study(){
 }
 
 function Quiz({claimReward}){
-  const [idx,setIdx]=useState(0);const [selected,setSelected]=useState({});const [rewardedToday,setRewardedToday]=useState(false);
+  const [idx,setIdx]=useState(0);
+  const [selected,setSelected]=useState({});
+  const [completedToday,setCompletedToday]=useState(null);
+  const [todayResult,setTodayResult]=useState(null);
   const q=QUIZ[idx];
+
   useEffect(()=>{
+    let alive=true;
     const uid=auth.currentUser.uid,date=localDateKey();
-    getDoc(doc(db,'quizDailyRewards',`${uid}_${date}`)).then(s=>setRewardedToday(s.exists())).catch(err=>console.error('퀴즈 보상 확인 오류',err));
+    getDoc(doc(db,'quizDailyRewards',`${uid}_${date}`))
+      .then(s=>{
+        if(!alive)return;
+        setCompletedToday(s.exists());
+        if(s.exists())setTodayResult(s.data());
+      })
+      .catch(err=>{
+        console.error('오늘의 퀴즈 완료 여부 확인 오류',err);
+        if(alive)setCompletedToday(false);
+      });
+    return()=>{alive=false;};
   },[]);
+
   const finish=async()=>{
+    if(Object.keys(selected).length<QUIZ.length)return alert('5문제를 모두 풀어야 채점할 수 있어요.');
     const score=QUIZ.filter((x,i)=>selected[i]===x.answer).length;
-    if(score!==5)return alert(`${score}/5 정답이에요.`);
     try{
-      const awarded=await claimReward();
-      if(awarded){setRewardedToday(true);alert('5문제 모두 정답! 오늘의 퀴즈 보상 +3P 🎉');}
-      else{setRewardedToday(true);alert('5문제 모두 정답! 🎉\n오늘은 이미 퀴즈 보상 3P를 받았어요.');}
+      const result=await claimReward(score);
+      if(result.alreadyCompleted){
+        setCompletedToday(true);
+        return alert('오늘의 퀴즈는 이미 완료했어요. 내일 다시 도전해요 😊');
+      }
+      setCompletedToday(true);
+      setTodayResult({score,points:result.awarded?3:0});
+      if(result.awarded)alert(`오늘의 퀴즈 ${score}/5 정답! +3P 적립 🎉\n오늘은 더 이상 퀴즈를 풀 수 없어요.`);
+      else alert(`오늘의 퀴즈 ${score}/5 정답이에요.\n오늘의 응시가 완료되었습니다. 내일 다시 도전해요 😊`);
     }catch(err){
-      console.error('퀴즈 포인트 적립 오류',err);
-      alert(`퀴즈 포인트 적립에 실패했습니다.\n${err.message||err}`);
+      console.error('퀴즈 완료/포인트 적립 오류',err);
+      alert(`퀴즈 처리에 실패했습니다.\n${err.message||err}`);
     }
   };
-  return <><PageHead title="퀴즈방"/><div className="quiz-reward-banner">🏆 <b>5문제를 모두 맞히면 하루에 한 번 3P!</b><span>{rewardedToday?'오늘의 3P 보상 획득 완료 ✓':'도전해 보세요 ✨'}</span></div><div className="warning-box">⚠️ <b>친구에게 정답을 알려주지 않습니다.</b></div><div className="quiz-meta"><strong>오늘의 교과 퀴즈 (5문제)</strong><span>{idx+1} / 5</span></div><div className="quiz-card"><span className="subject-pill">{q.subject}</span><h2>{q.q}</h2>{q.options.map(o=><label className={`quiz-option ${selected[idx]===o?'selected':''}`} key={o}><input type="radio" checked={selected[idx]===o} onChange={()=>setSelected({...selected,[idx]:o})}/>{o}</label>)}</div><button className="primary-wide" onClick={()=>idx<4?setIdx(idx+1):finish()}>{idx<4?'다음 문제':'채점하기'}</button></>;
+
+  if(completedToday===null)return <><PageHead title="퀴즈방"/><div className="empty-card">오늘의 퀴즈 기록을 확인하고 있어요...</div></>;
+
+  if(completedToday)return <><PageHead title="퀴즈방"/><div className="quiz-reward-banner">🏆 <b>오늘의 퀴즈를 이미 완료했어요!</b><span>{todayResult?.score!=null?`${todayResult.score}/5 정답${Number(todayResult.points)===3?' · +3P 획득 ✓':''}`:'오늘의 응시 완료 ✓'}</span></div><div className="empty-card"><b>오늘은 퀴즈를 다시 풀 수 없어요.</b><br/>내일 새로운 기회에 다시 도전해요 😊</div></>;
+
+  return <><PageHead title="퀴즈방"/><div className="quiz-reward-banner">🏆 <b>오늘 딱 한 번 도전! 5문제를 모두 맞히면 +3P</b><span>퀴즈를 완료하면 오늘은 다시 풀 수 없어요.</span></div><div className="warning-box">⚠️ <b>친구에게 정답을 알려주지 않습니다.</b></div><div className="quiz-meta"><strong>오늘의 교과 퀴즈 (5문제)</strong><span>{idx+1} / 5</span></div><div className="quiz-card"><span className="subject-pill">{q.subject}</span><h2>{q.q}</h2>{q.options.map(o=><label className={`quiz-option ${selected[idx]===o?'selected':''}`} key={o}><input type="radio" checked={selected[idx]===o} onChange={()=>setSelected({...selected,[idx]:o})}/>{o}</label>)}</div><button className="primary-wide" onClick={()=>idx<4?setIdx(idx+1):finish()}>{idx<4?'다음 문제':'채점하기'}</button></>;
 }
 
 function Gallery({onReward,points,setPoints}){
