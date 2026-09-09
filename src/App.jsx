@@ -30,13 +30,257 @@ const COUPONS = [
   ['🎬','게임/영화 선택권',50],['💺','자리 바꾸기 5일권',60],
 ];
 
-const QUIZ = [
-  { subject:'국어', q:'글쓴이가 글에서 가장 중요하게 말하고자 하는 생각은?', options:['중심 생각','문단 번호','글자 수','삽화'], answer:'중심 생각' },
-  { subject:'사회', q:'지도에서 실제 거리를 일정한 비율로 줄여 나타낸 정도는?', options:['축척','방위','범례','기호'], answer:'축척' },
-  { subject:'과학', q:'식물이 잘 자라기 위해 필요한 조건이 아닌 것은?', options:['물','빛','알맞은 온도','플라스틱 조각'], answer:'플라스틱 조각' },
-  { subject:'수학', q:'48,000에서 1,000을 6번 빼면 얼마일까요?', options:['42,000','43,000','46,000','54,000'], answer:'42,000' },
-  { subject:'수학', q:'어떤 수에 2,500을 더했더니 10,000입니다. 그 수에서 1,750을 빼면?', options:['5,750','6,250','7,500','8,250'], answer:'5,750' },
-];
+// 4학년 교육과정 범위에서 날짜마다 새로운 5문제를 만들어 저장합니다.
+// 고정된 30문제 풀을 반복하지 않고, 날짜를 seed로 사용해 문항의 수치·상황·선택지를 바꿉니다.
+function quizDateKey(){
+  return localDateKey();
+}
+
+function hashText(text){
+  let h=2166136261;
+  for(let i=0;i<text.length;i++){
+    h^=text.charCodeAt(i);
+    h=Math.imul(h,16777619);
+  }
+  return h>>>0;
+}
+
+function seededRandom(seedText){
+  let seed=hashText(seedText);
+  return ()=>{
+    seed=(Math.imul(seed,1664525)+1013904223)>>>0;
+    return seed/4294967296;
+  };
+}
+
+function pick(rand,arr){
+  return arr[Math.floor(rand()*arr.length)];
+}
+
+function shuffle(rand,arr){
+  const out=[...arr];
+  for(let i=out.length-1;i>0;i--){
+    const j=Math.floor(rand()*(i+1));
+    [out[i],out[j]]=[out[j],out[i]];
+  }
+  return out;
+}
+
+function makeOptions(rand,answer,wrong){
+  return shuffle(rand,[answer,...wrong.filter(x=>x!==answer).slice(0,3)]);
+}
+
+
+const QUIZ_DIFFICULTY_LABELS={
+  easy:'기본',
+  medium:'응용',
+  hard:'도전',
+};
+
+function buildKoreanQuestion(rand,difficulty='medium'){
+  const banks={
+    easy:[
+      ['다음 중 사실을 나타내는 문장은 무엇일까요?','우리 학교 도서관은 2층에 있다.',['우리 학교 도서관이 가장 멋지다.','나는 도서관이 정말 좋다.','도서관 책은 모두 재미있다.']],
+      ['국어사전에서 낱말을 찾을 때 기본이 되는 순서는 무엇일까요?','가나다순',['글자 수가 많은 순','뜻이 긴 순','내가 좋아하는 순']],
+      ['글을 요약할 때 가장 알맞은 방법은 무엇일까요?','중요한 내용을 간추려 짧게 나타낸다.',['모든 문장을 그대로 옮긴다.','내 생각만 길게 쓴다.','삽화의 색깔만 설명한다.']],
+      ['친구의 의견을 들을 때 가장 알맞은 태도는 무엇일까요?','말을 끝까지 듣고 까닭을 생각한다.',['내 생각과 다르면 바로 끊는다.','친구가 말할 때 다른 일을 한다.','큰 소리로 내 의견만 반복한다.']],
+    ],
+    medium:[
+      ['글의 제목과 반복되는 내용을 살펴보는 가장 큰 까닭은 무엇일까요?','글의 중심 생각을 찾기 위해서',['글자 수를 세기 위해서','문단 번호를 정하기 위해서','종이의 크기를 알기 위해서']],
+      ['의견을 뒷받침하는 까닭을 말하면 좋은 점은 무엇일까요?','내 생각을 더 분명하게 전달할 수 있다.',['말을 더 빨리 끝낼 수 있다.','상대의 말을 듣지 않아도 된다.','항상 내 의견만 옳게 된다.']],
+      ['“학교 운동장에 그늘막을 더 설치해야 합니다. 여름에는 햇볕이 강해 쉬기 어렵기 때문입니다.”에서 의견을 뒷받침하는 까닭은 무엇일까요?','여름에는 햇볕이 강해 쉬기 어렵기 때문이다.',['학교 운동장이 넓기 때문이다.','그늘막의 색이 예쁘기 때문이다.','친구들이 운동을 좋아하기 때문이다.']],
+      ['두 문단의 공통된 내용을 묶어 한 문장으로 나타내려 할 때 가장 먼저 할 일은 무엇일까요?','각 문단의 중요한 내용을 찾는다.',['문단의 글자 수를 센다.','가장 긴 문장을 그대로 옮긴다.','모든 문장을 같은 길이로 줄인다.']],
+    ],
+    hard:[
+      ['“우리 반은 매주 금요일 책을 읽습니다. 책을 읽으면 새로운 정보를 얻고, 다른 사람의 생각도 이해할 수 있습니다.” 이 글의 중심 생각으로 가장 알맞은 것은?','책 읽기는 새로운 정보와 다른 사람의 생각을 이해하는 데 도움이 된다.',['우리 반은 금요일마다 체육을 한다.','책은 반드시 금요일에만 읽어야 한다.','새로운 정보는 책이 아닌 곳에서만 얻을 수 있다.']],
+      ['친구가 “학교에 식물을 더 심자.”라고 주장했습니다. 이 의견을 가장 잘 뒷받침하는 자료는 무엇일까요?','학교의 녹지 면적과 여름철 그늘 부족을 조사한 자료',['친구들이 좋아하는 급식 순위','학급에서 키우는 애완동물 사진','운동회 종목 목록']],
+      ['다음 중 같은 낱말이 서로 다른 뜻으로 쓰인 예로 가장 알맞은 것은?','“길이 막혔다.”와 “말문이 막혔다.”',['“비가 온다.”와 “눈이 온다.”','“책을 읽다.”와 “신문을 읽다.”','“밥을 먹다.”와 “빵을 먹다.”']],
+      ['주장하는 글을 고쳐 쓸 때 가장 먼저 확인할 내용으로 알맞은 것은?','주장과 까닭이 서로 잘 연결되는지 확인한다.',['문장 수가 정확히 같은지 확인한다.','모든 문장의 끝말이 같은지 확인한다.','글씨 크기가 모두 같은지 확인한다.']],
+    ]
+  };
+  const [q,answer,wrong]=pick(rand,banks[difficulty]||banks.medium);
+  return {subject:'국어',difficulty,q,options:makeOptions(rand,answer,wrong),answer};
+}
+
+function buildMathQuestion(rand,difficulty='medium'){
+  let q,answer,wrong;
+  if(difficulty==='easy'){
+    const kind=Math.floor(rand()*4);
+    if(kind===0){
+      const a=(Math.floor(rand()*70)+20)*1000, b=(Math.floor(rand()*8)+1)*1000;
+      answer=(a-b).toLocaleString('ko-KR');
+      q=`${a.toLocaleString('ko-KR')}에서 ${b.toLocaleString('ko-KR')}을 빼면 얼마일까요?`;
+      wrong=[(a+b).toLocaleString('ko-KR'),(a-b+1000).toLocaleString('ko-KR'),(a-b-1000).toLocaleString('ko-KR')];
+    }else if(kind===1){
+      const a=Math.floor(rand()*70)+20,b=Math.floor(rand()*8)+2,v=a*b;
+      answer=String(v);q=`${a}×${b}의 값은 얼마일까요?`;
+      wrong=[String(v+b),String(v-b),String(a+b)];
+    }else if(kind===2){
+      const b=Math.floor(rand()*7)+3,c=Math.floor(rand()*8)+2,a=b*c;
+      answer=String(c);q=`${a}÷${b}의 몫은 얼마일까요?`;
+      wrong=[String(c+1),String(Math.max(1,c-1)),String(b)];
+    }else{
+      const km=Math.floor(rand()*8)+2;
+      answer=`${km*1000}m`;q=`${km}km는 몇 m일까요?`;
+      wrong=[`${km*100}m`,`${km*10}m`,`${km*10000}m`];
+    }
+  }else if(difficulty==='hard'){
+    const kind=Math.floor(rand()*5);
+    if(kind===0){
+      const packs=Math.floor(rand()*7)+4,each=Math.floor(rand()*25)+16,give=Math.floor(rand()*30)+10;
+      const total=packs*each-give;
+      q=`연필이 한 상자에 ${each}자루씩 ${packs}상자 있습니다. 그중 ${give}자루를 나누어 주었습니다. 남은 연필은 몇 자루일까요?`;
+      answer=String(total);
+      wrong=[String(packs*each+give),String(packs+each-give),String(total+each)];
+    }else if(kind===1){
+      const den=Math.floor(rand()*5)+6;
+      let a=Math.floor(rand()*(den-2))+1,b=Math.floor(rand()*(den-a-1))+1;
+      q=`민지는 케이크의 ${a}/${den}, 현우는 ${b}/${den}만큼 먹었습니다. 두 사람이 먹은 양을 합하면 전체의 얼마일까요?`;
+      answer=`${a+b}/${den}`;
+      wrong=[`${a+b}/${den*2}`,`${Math.abs(a-b)}/${den}`,`${Math.min(den-1,a+b+1)}/${den}`];
+    }else if(kind===2){
+      const a=(Math.floor(rand()*5)+4)*10,b=(Math.floor(rand()*4)+2)*10,c=180-a-b;
+      q=`삼각형의 두 각이 ${a}°와 ${b}°입니다. 나머지 한 각의 크기는 몇 도일까요?`;
+      answer=`${c}°`;
+      wrong=[`${180-c}°`,`${c+20}°`,`${Math.max(10,c-20)}°`];
+    }else if(kind===3){
+      const n=Math.floor(rand()*7)+3,price=(Math.floor(rand()*7)+2)*100;
+      const paid=Math.ceil((n*price)/1000)*1000;
+      const change=paid-n*price;
+      q=`공책 한 권이 ${price.toLocaleString()}원입니다. ${n}권을 사고 ${paid.toLocaleString()}원을 냈다면 거스름돈은 얼마일까요?`;
+      answer=`${change.toLocaleString()}원`;
+      wrong=[`${(change+price).toLocaleString()}원`,`${Math.max(0,change-price).toLocaleString()}원`,`${(paid-price).toLocaleString()}원`];
+    }else{
+      const side=Math.floor(rand()*7)+3;
+      q=`한 변의 길이가 ${side}cm인 정사각형의 네 변의 길이를 모두 더하면 몇 cm일까요?`;
+      answer=`${side*4}cm`;
+      wrong=[`${side*2}cm`,`${side*side}cm`,`${side+4}cm`];
+    }
+  }else{
+    const kind=Math.floor(rand()*5);
+    if(kind===0){
+      const den=Math.floor(rand()*7)+5,a=Math.floor(rand()*(den-2))+1,b=Math.floor(rand()*(den-a-1))+1;
+      answer=`${a+b}/${den}`;q=`${a}/${den}와 ${b}/${den}를 더하면 얼마일까요?`;
+      wrong=[`${a+b}/${den*2}`,`${Math.abs(a-b)}/${den}`,`${a+b+1}/${den}`];
+    }else if(kind===1){
+      const den=Math.floor(rand()*7)+5,a=Math.floor(rand()*(den-2))+2,b=Math.floor(rand()*(a-1))+1;
+      answer=`${a-b}/${den}`;q=`${a}/${den}에서 ${b}/${den}를 빼면 얼마일까요?`;
+      wrong=[`${a+b}/${den}`,`${a-b}/${den*2}`,`${a-b+1}/${den}`];
+    }else if(kind===2){
+      const a=(Math.floor(rand()*10)+3)*10,b=(Math.floor(rand()*5)+2)*10,c=180-a-b;
+      if(c<=0)return buildMathQuestion(rand,difficulty);
+      answer=`${c}°`;q=`삼각형의 두 각이 ${a}°와 ${b}°일 때, 나머지 한 각은 몇 도일까요?`;
+      wrong=[`${180-c}°`,`${c+10}°`,`${Math.max(10,c-10)}°`];
+    }else if(kind===3){
+      const a=Math.floor(rand()*5000)+2500,b=Math.floor(rand()*1800)+500;
+      q=`어떤 수에 ${b.toLocaleString()}을 더했더니 ${(a+b).toLocaleString()}이 되었습니다. 어떤 수는 얼마일까요?`;
+      answer=a.toLocaleString();
+      wrong=[(a+b+b).toLocaleString(),Math.max(0,a-b).toLocaleString(),(a+100).toLocaleString()];
+    }else{
+      const rows=Math.floor(rand()*5)+3,cols=Math.floor(rand()*6)+4;
+      q=`의자를 한 줄에 ${cols}개씩 ${rows}줄 놓았습니다. 의자는 모두 몇 개일까요?`;
+      answer=String(rows*cols);
+      wrong=[String(rows+cols),String(rows*cols+cols),String(rows*cols-rows)];
+    }
+  }
+  return {subject:'수학',difficulty,q,options:makeOptions(rand,answer,wrong),answer};
+}
+
+function buildSocialQuestion(rand,difficulty='medium'){
+  const banks={
+    easy:[
+      ['지도에서 실제 거리를 일정한 비율로 줄여 나타낸 정도를 무엇이라고 할까요?','축척',['방위','범례','기호']],
+      ['지도에서 동서남북의 방향을 나타내는 것을 무엇이라고 할까요?','방위',['축척','범례','등고선']],
+      ['지도에 사용된 기호의 뜻을 설명해 놓은 것은 무엇일까요?','범례',['방위','축척','제목']],
+      ['여러 사람이 함께 이용하도록 만든 시설에 해당하는 것은 무엇일까요?','도서관',['개인 침실','개인 장난감','가정용 냉장고']],
+    ],
+    medium:[
+      ['지역의 모습을 조사할 때 도움이 되는 자료로 가장 알맞은 것은?','지도와 사진, 현장 조사 기록',['친구의 별명 목록','게임 점수표','개인 비밀번호']],
+      ['우리 지역의 문제를 해결하는 바른 방법은 무엇일까요?','주민의 의견을 모아 해결 방법을 찾는다.',['한 사람의 생각만 따른다.','문제를 그냥 둔다.','아무도 모르게 결정한다.']],
+      ['주민 참여의 좋은 점으로 알맞은 것은 무엇일까요?','지역 문제 해결에 다양한 의견을 반영할 수 있다.',['모든 결정을 한 사람이 하게 된다.','지역 문제를 숨길 수 있다.','주민의 의견을 들을 필요가 없어진다.']],
+      ['새로운 도로를 만들기 전 지역 주민의 의견을 조사하는 가장 알맞은 방법은?','설문 조사와 주민 회의를 함께 활용한다.',['한 사람에게만 물어본다.','아무에게도 알리지 않는다.','다른 지역의 의견만 조사한다.']],
+    ],
+    hard:[
+      ['학교 주변의 불법 주정차 문제 원인을 알아보려 합니다. 가장 적절한 조사 방법은?','시간대별 현장 관찰과 주민·운전자 의견 조사를 함께 한다.',['인터넷 사진 한 장만 보고 결정한다.','문제 장소와 관계없는 지역만 조사한다.','친구 한 명의 생각을 전체 의견으로 정한다.']],
+      ['두 지역의 인구와 시설을 비교하려고 합니다. 가장 적절한 자료 조합은 무엇일까요?','인구 통계와 시설 분포 지도',['좋아하는 음식 설문과 일기','게임 이용 시간과 노래 순위','개인 사진과 비밀번호']],
+      ['지도에서 축척이 1cm가 실제 500m를 뜻합니다. 지도에서 두 장소 사이가 4cm라면 실제 거리는?','2km',['200m','500m','4km']],
+      ['지역 문제 해결 방안 여러 개 중 하나를 정할 때 가장 바람직한 기준은?','효과, 비용, 주민 의견을 함께 살펴본다.',['가장 먼저 나온 의견만 따른다.','가장 비싼 방법을 무조건 고른다.','의견이 다른 사람을 제외한다.']],
+    ]
+  };
+  const [q,answer,wrong]=pick(rand,banks[difficulty]||banks.medium);
+  return {subject:'사회',difficulty,q,options:makeOptions(rand,answer,wrong),answer};
+}
+
+function buildScienceQuestion(rand,difficulty='medium'){
+  const banks={
+    easy:[
+      ['식물의 뿌리가 하는 일로 알맞은 것은 무엇일까요?','물을 흡수한다.',['꽃가루를 만든다.','열매를 먹는다.','햇빛을 가린다.']],
+      ['식물의 줄기가 하는 일로 알맞은 것은 무엇일까요?','물과 양분이 이동하는 통로가 된다.',['씨를 땅속에 묻는다.','빛을 완전히 막는다.','뿌리를 대신해 흙을 만든다.']],
+      ['물이 얼어 고체 상태가 된 것은 무엇일까요?','얼음',['수증기','안개','이슬']],
+      ['자석에 잘 붙는 물체의 재료는 무엇일까요?','철',['나무','종이','고무']],
+    ],
+    medium:[
+      ['물이 끓을 때 물 표면과 물속에서 일어나는 변화로 알맞은 것은?','물이 수증기로 변한다.',['물이 얼음으로 변한다.','물이 흙으로 변한다.','물이 사라져 아무것도 되지 않는다.']],
+      ['그림자가 생기기 위해 필요한 조건으로 알맞은 것은?','빛과 빛을 막는 물체',['소리와 공기','물과 흙','바람과 구름']],
+      ['자석의 같은 극끼리 가까이 가져가면 어떻게 될까요?','서로 밀어낸다.',['서로 끌어당긴다.','항상 붙어서 움직이지 않는다.','자석의 성질이 사라진다.']],
+      ['식물이 잘 자라기 위한 조건을 알아보는 실험에서 한 가지 조건만 다르게 하는 까닭은?','그 조건이 식물의 자람에 미치는 영향을 비교하기 위해서',['실험 시간을 무조건 줄이기 위해서','화분을 더 예쁘게 꾸미기 위해서','결과를 원하는 대로 만들기 위해서']],
+    ],
+    hard:[
+      ['같은 크기의 화분 두 개에 같은 식물을 심었습니다. A에는 빛을 주고 B에는 빛을 주지 않았으며 물과 온도는 같게 했습니다. 이 실험에서 알아보려는 것은?','빛이 식물의 자람에 미치는 영향',['물의 양이 식물의 자람에 미치는 영향','화분 크기가 식물의 자람에 미치는 영향','흙의 색이 식물의 자람에 미치는 영향']],
+      ['찬 음료가 든 컵 바깥쪽에 잠시 뒤 물방울이 맺혔습니다. 가장 알맞은 설명은?','공기 중 수증기가 차가운 컵 주변에서 물로 변했다.',['컵 안의 물이 컵 벽을 그대로 통과했다.','컵이 스스로 물을 만들었다.','공기 중 산소가 얼음으로 변했다.']],
+      ['전등과 물체 사이의 거리를 그대로 두고 물체를 벽에 더 가까이 옮기면 일반적으로 그림자는 어떻게 될까요?','더 작아진다.',['더 커진다.','항상 완전히 사라진다.','색이 빨간색으로 변한다.']],
+      ['막대자석의 N극 가까이에 다른 막대자석의 S극을 가져갔습니다. 예상되는 현상은?','서로 끌어당긴다.',['서로 밀어낸다.','아무 힘도 작용하지 않는다.','두 자석 모두 자성을 잃는다.']],
+    ]
+  };
+  const [q,answer,wrong]=pick(rand,banks[difficulty]||banks.medium);
+  return {subject:'과학',difficulty,q,options:makeOptions(rand,answer,wrong),answer};
+}
+
+function buildEnglishQuestion(rand,difficulty='medium'){
+  const banks={
+    easy:[
+      ['“How are you?”에 알맞은 대답은 무엇일까요?','I’m fine, thank you.',['It is a pencil.','I am ten o’clock.','This is Monday.']],
+      ['“What time is it?”에 알맞은 대답은 무엇일까요?','It’s three o’clock.',['I’m happy.','It’s sunny.','I like apples.']],
+      ['“How’s the weather?”에 알맞은 대답은 무엇일까요?','It’s sunny.',['I’m eleven.','It’s a desk.','I can swim.']],
+      ['“Can you swim?”에 알맞은 대답은 무엇일까요?','Yes, I can.',['Yes, it is.','I’m a student.','It’s seven.']],
+    ],
+    medium:[
+      ['친구가 “Do you like apples?”라고 물었습니다. 사과를 좋아한다고 대답하려면?','Yes, I do.',['Yes, I am.','Yes, it is.','Yes, I can.']],
+      ['“What is this?”에 알맞은 대답은 무엇일까요?','It’s a book.',['I’m fine.','It’s Monday.','I can dance.']],
+      ['친구에게 지금 시각을 묻는 표현으로 알맞은 것은?','What time is it?',['How old are you?','What is this?','How’s the weather?']],
+      ['친구에게 수영을 할 수 있는지 묻는 표현으로 알맞은 것은?','Can you swim?',['Do you like swimming?','What time is it?','How are you?']],
+    ],
+    hard:[
+      ['A: “Can you play the piano?” B: “_____. I can play very well.” 빈칸에 알맞은 말은?','Yes, I can.',['No, I can’t.','Yes, I do.','It’s a piano.']],
+      ['A: “How’s the weather?” B: “It’s rainy.” 이 대화에서 알 수 있는 것은?','비가 오는 날씨이다.',['지금 세 시이다.','친구가 수영을 잘한다.','책상 위에 책이 있다.']],
+      ['A: “Do you like pizza?” B: “No, I don’t.” B의 뜻으로 알맞은 것은?','피자를 좋아하지 않는다.',['피자를 만들 수 없다.','피자가 보이지 않는다.','지금 피자를 먹고 있다.']],
+      ['A: “What time is it?” B: “It’s half past four.” 알맞은 시각은?','4시 30분',['4시 정각','3시 30분','5시 30분']],
+    ]
+  };
+  const [q,answer,wrong]=pick(rand,banks[difficulty]||banks.medium);
+  return {subject:'영어',difficulty,q,options:makeOptions(rand,answer,wrong),answer};
+}
+
+function generateGrade4DailyQuiz(date=quizDateKey()){
+  const rand=seededRandom(`grade4-mixed-v3-${date}`);
+
+  // 학생이 난이도를 선택하지 않습니다.
+  // 날짜마다 자동으로 난이도를 섞되, 매일 기본·응용·도전 문제가 반드시 모두 포함됩니다.
+  // 날짜에 따라 1기본+3응용+1도전 또는 1기본+2응용+2도전 중 하나가 선택됩니다.
+  const difficultyPattern=rand()<0.5
+    ? ['easy','medium','medium','medium','hard']
+    : ['easy','medium','medium','hard','hard'];
+  const difficulties=shuffle(rand,difficultyPattern);
+  const builders=[
+    buildKoreanQuestion,
+    buildMathQuestion,
+    buildSocialQuestion,
+    buildScienceQuestion,
+    buildEnglishQuestion,
+  ];
+
+  return shuffle(rand,builders.map((builder,i)=>builder(rand,difficulties[i])));
+}
 
 const MISSION_LIST = [
   '친구 한 명의 좋은 점을 직접 말해주기',
@@ -63,6 +307,59 @@ function avatarUrl(config={}){
   const hairColor=config.hairColor||'2c1b18';
   const backgroundColor=config.backgroundColor||'e8f4ff';
   return `https://api.dicebear.com/10.x/adventurer/svg?seed=${encodeURIComponent(seed)}&skinColor=${skinColor}&hairColor=${hairColor}&backgroundColor=${backgroundColor}&backgroundType=solid&radius=50`;
+}
+
+
+const DAISO_LOGO_URL=`${import.meta.env.BASE_URL}daiso-logo.png`;
+
+function ClassLogo({onClick,size=44}){
+  return <button
+    type="button"
+    onClick={onClick}
+    title="다이소반 로고 크게 보기"
+    aria-label="다이소반 로고 크게 보기"
+    style={{
+      width:size,height:size,border:0,borderRadius:14,padding:3,background:'#fff',
+      overflow:'hidden',cursor:'pointer',display:'grid',placeItems:'center',
+      boxShadow:'0 0 0 1px rgba(0,0,0,.05)'
+    }}
+  >
+    <img src={DAISO_LOGO_URL} alt="다이소반 로고" style={{width:'100%',height:'100%',objectFit:'contain'}}/>
+  </button>;
+}
+
+function LogoViewer({onClose}){
+  return <div
+    role="dialog"
+    aria-modal="true"
+    aria-label="다이소반 로고 크게 보기"
+    onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}
+    style={{
+      position:'fixed',inset:0,zIndex:9999,background:'rgba(20,20,30,.72)',
+      display:'grid',placeItems:'center',padding:24
+    }}
+  >
+    <div style={{
+      position:'relative',width:'min(92vw,620px)',maxHeight:'90vh',
+      background:'#fff',borderRadius:24,padding:20,display:'grid',placeItems:'center',
+      boxShadow:'0 24px 80px rgba(0,0,0,.3)'
+    }}>
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="닫기"
+        style={{
+          position:'absolute',right:12,top:12,width:42,height:42,border:0,
+          borderRadius:'50%',background:'#f1eefc',fontSize:26,cursor:'pointer'
+        }}
+      >×</button>
+      <img
+        src={DAISO_LOGO_URL}
+        alt="다이소반 로고 확대 이미지"
+        style={{maxWidth:'100%',maxHeight:'calc(90vh - 40px)',objectFit:'contain',borderRadius:16}}
+      />
+    </div>
+  </div>;
 }
 
 function AvatarPicker({value,onClose,onSave}){
@@ -146,6 +443,7 @@ export default function App(){
 function Login(){
   const [error,setError]=useState('');
   const [busy,setBusy]=useState(false);
+  const [logoOpen,setLogoOpen]=useState(false);
 
   const googleLogin=async()=>{
     setError('');
@@ -167,7 +465,7 @@ function Login(){
 
   return <div className="login-page">
     <div className="login-card">
-      <div className="brand-mark">🌱</div>
+      <div style={{display:'flex',justifyContent:'center',marginBottom:12}}><ClassLogo size={84} onClick={()=>setLogoOpen(true)}/></div>
       <h1>행복한 다이소반</h1>
       <p>함께 배려하고, 함께 성장하는 교실</p>
       <button type="button" className="google-login-btn" onClick={googleLogin} disabled={busy}>
@@ -177,6 +475,7 @@ function Login(){
       <div className="login-help">학생은 자신의 학교 Google 계정으로 로그인하세요.</div>
       {error&&<div className="error-box">{error}</div>}
     </div>
+    {logoOpen&&<LogoViewer onClose={()=>setLogoOpen(false)}/>}
   </div>;
 }
 
@@ -194,6 +493,7 @@ function StudentApp({profile}){
   const [missionDone,setMissionDone]=useState(false);
   const [avatar,setAvatar]=useState(profile.avatar||{seed:'daiso01',skinColor:'f2d3b1',hairColor:'2c1b18',backgroundColor:'e8f4ff'});
   const [avatarOpen,setAvatarOpen]=useState(false);
+  const [logoOpen,setLogoOpen]=useState(false);
   const mission=MISSION_LIST[new Date().getDate()%MISSION_LIST.length];
   const classPoint=useClassPointData();
 
@@ -297,7 +597,7 @@ function StudentApp({profile}){
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><div className="brand-icon">🌱</div><div><strong>행복한 다이소반</strong><span>4학년 1반</span></div></div>
+      <div className="brand"><ClassLogo size={44} onClick={()=>setLogoOpen(true)}/><div><strong>행복한 다이소반</strong><span>4학년 1반</span></div></div>
       <nav>{MENU.map(([key,icon,label])=><button key={key} className={page===key?'active':''} onClick={()=>setPage(key)}>
         <span className="nav-icon">{icon}</span><span>{label}</span>
       </button>)}</nav>
@@ -325,6 +625,7 @@ function StudentApp({profile}){
       {MENU.slice(0,5).map(([key,icon,label])=><button key={key} className={page===key?'active':''} onClick={()=>setPage(key)}><span>{icon}</span><small>{label}</small></button>)}
     </nav>
     {avatarOpen&&<AvatarPicker value={avatar} onClose={()=>setAvatarOpen(false)} onSave={saveAvatar}/>}
+    {logoOpen&&<LogoViewer onClose={()=>setLogoOpen(false)}/>}
   </div>;
 }
 
@@ -536,32 +837,66 @@ function Quiz({claimReward}){
   const [selected,setSelected]=useState({});
   const [completedToday,setCompletedToday]=useState(null);
   const [todayResult,setTodayResult]=useState(null);
-  const q=QUIZ[idx];
+  const [quiz,setQuiz]=useState(null);
+  const [quizError,setQuizError]=useState('');
+  const date=quizDateKey();
 
   useEffect(()=>{
     let alive=true;
-    const uid=auth.currentUser.uid,date=localDateKey();
+    const uid=auth.currentUser.uid;
     const attemptRef=doc(db,'quizAttempts',`${uid}_${date}`);
     const legacyRef=doc(db,'quizDailyRewards',`${uid}_${date}`);
+    const quizSetId=`v3_${date}`;
+    const setRef=doc(db,'dailyQuizSets',quizSetId);
 
-    // 예전 버전에서 오늘 이미 보상을 받은 학생도 다시 풀 수 없도록 먼저 확인합니다.
-    getDoc(legacyRef).then(s=>{
+    // 1) 날짜별 퀴즈 세트를 Firestore에서 불러옵니다.
+    //    오늘 세트가 아직 없다면 4학년용 새 5문제를 만들어 그 날짜 문서에 고정 저장합니다.
+    (async()=>{
+      try{
+        const snap=await getDoc(setRef);
+        if(!alive)return;
+        if(snap.exists() && Array.isArray(snap.data()?.questions) && snap.data().questions.length===5){
+          setQuiz(snap.data().questions);
+        }else{
+          const generated=generateGrade4DailyQuiz(date);
+          await setDoc(setRef,{
+            date:quizSetId,
+            calendarDate:date,
+            version:3,
+            grade:4,
+            subjects:['국어','수학','사회','과학','영어'],
+            difficultyMix:true,
+            questions:generated,
+            createdAt:serverTimestamp()
+          });
+          if(alive)setQuiz(generated);
+        }
+      }catch(err){
+        console.error('오늘의 퀴즈 세트 불러오기/생성 오류',err);
+        // Firestore 저장이 일시적으로 실패해도 오늘 날짜 기반 문제는 화면에 보여 줍니다.
+        // 같은 날짜에는 같은 문제, 날짜가 바뀌면 새로운 문제가 만들어집니다.
+        if(alive){
+          setQuiz(generateGrade4DailyQuiz(date));
+          setQuizError('오늘의 퀴즈 세트 저장을 확인하지 못했어요.');
+        }
+      }
+    })();
+
+    // 2) 오늘 응시 완료 여부를 실시간 확인합니다.
+    getDoc(legacyRef).then(snap=>{
       if(!alive)return;
-      if(s.exists()){
+      if(snap.exists()){
         setCompletedToday(true);
-        setTodayResult(s.data());
+        setTodayResult(snap.data());
       }
     }).catch(err=>console.error('기존 퀴즈 기록 확인 오류',err));
 
-    // 새 응시 기록은 실시간으로 감시합니다. 퀴즈방을 나갔다 다시 들어오거나
-    // 새로고침해도 Firestore 기록이 존재하는 한 문제 화면이 다시 열리지 않습니다.
-    const unsub=onSnapshot(attemptRef,s=>{
+    const unsub=onSnapshot(attemptRef,snap=>{
       if(!alive)return;
-      if(s.exists()){
+      if(snap.exists()){
         setCompletedToday(true);
-        setTodayResult(s.data());
+        setTodayResult(snap.data());
       }else{
-        // 기존 기록도 없을 때에만 오늘 응시 가능 상태로 둡니다.
         getDoc(legacyRef).then(oldSnap=>{
           if(!alive)return;
           if(oldSnap.exists()){
@@ -571,19 +906,28 @@ function Quiz({claimReward}){
             setCompletedToday(false);
             setTodayResult(null);
           }
-        }).catch(()=>{ if(alive)setCompletedToday(false); });
+        }).catch(err=>{
+          console.error('퀴즈 응시 여부 확인 오류',err);
+          if(alive)setCompletedToday(false);
+        });
       }
     },err=>{
       console.error('오늘의 퀴즈 완료 여부 실시간 확인 오류',err);
-      if(alive)setCompletedToday(false);
+      // 권한 오류가 생겼다고 재응시를 허용하지 않습니다.
+      // 확인 실패 상태로 두어 중복 포인트 지급 가능성을 막습니다.
+      if(alive){
+        setCompletedToday(null);
+        setQuizError('오늘의 응시 기록을 확인하지 못했어요. 새로고침 후 다시 시도해주세요.');
+      }
     });
 
     return()=>{alive=false;unsub();};
-  },[]);
+  },[date]);
 
   const finish=async()=>{
-    if(Object.keys(selected).length<QUIZ.length)return alert('5문제를 모두 풀어야 채점할 수 있어요.');
-    const score=QUIZ.filter((x,i)=>selected[i]===x.answer).length;
+    if(!quiz || quiz.length!==5)return alert('오늘의 퀴즈를 불러오는 중이에요. 잠시 후 다시 눌러주세요.');
+    if(Object.keys(selected).length<quiz.length)return alert('5문제를 모두 풀어야 채점할 수 있어요.');
+    const score=quiz.filter((x,i)=>selected[i]===x.answer).length;
     try{
       const result=await claimReward(score);
       if(result.alreadyCompleted){
@@ -591,7 +935,7 @@ function Quiz({claimReward}){
         return alert('오늘의 퀴즈는 이미 완료했어요. 내일 다시 도전해요 😊');
       }
       setCompletedToday(true);
-      setTodayResult({score,points:result.awarded?3:0});
+      setTodayResult({score,points:result.awarded?3:0,date});
       if(result.awarded)alert(`오늘의 퀴즈 ${score}/5 정답! +3P 적립 🎉\n오늘은 더 이상 퀴즈를 풀 수 없어요.`);
       else alert(`오늘의 퀴즈 ${score}/5 정답이에요.\n오늘의 응시가 완료되었습니다. 내일 다시 도전해요 😊`);
     }catch(err){
@@ -600,11 +944,12 @@ function Quiz({claimReward}){
     }
   };
 
-  if(completedToday===null)return <><PageHead title="퀴즈방"/><div className="empty-card">오늘의 퀴즈 기록을 확인하고 있어요...</div></>;
+  if(completedToday===null || !quiz)return <><PageHead title="퀴즈방"/><div className="empty-card">오늘의 4학년 퀴즈를 준비하고 있어요...</div>{quizError&&<div className="warning-box">⚠️ {quizError}</div>}</>;
 
-  if(completedToday)return <><PageHead title="퀴즈방"/><div className="quiz-reward-banner">🏆 <b>오늘의 퀴즈를 이미 완료했어요!</b><span>{todayResult?.score!=null?`${todayResult.score}/5 정답${Number(todayResult.points)===3?' · +3P 획득 ✓':''}`:'오늘의 응시 완료 ✓'}</span></div><div className="empty-card"><b>오늘은 퀴즈를 다시 풀 수 없어요.</b><br/>내일 새로운 기회에 다시 도전해요 😊</div></>;
+  if(completedToday)return <><PageHead title="퀴즈방"/><div className="quiz-reward-banner">🏆 <b>오늘의 퀴즈를 이미 완료했어요!</b><span>{todayResult?.score!=null?`${todayResult.score}/5 정답${Number(todayResult.points)===3?' · +3P 획득 ✓':''}`:'오늘의 응시 완료 ✓'}</span></div><div className="empty-card"><b>오늘은 퀴즈를 다시 풀 수 없어요.</b><br/>내일은 새로운 4학년 퀴즈 5문제가 열려요 😊</div></>;
 
-  return <><PageHead title="퀴즈방"/><div className="quiz-reward-banner">🏆 <b>오늘 딱 한 번 도전! 5문제를 모두 맞히면 +3P</b><span>퀴즈를 완료하면 오늘은 다시 풀 수 없어요.</span></div><div className="warning-box">⚠️ <b>친구에게 정답을 알려주지 않습니다.</b></div><div className="quiz-meta"><strong>오늘의 교과 퀴즈 (5문제)</strong><span>{idx+1} / 5</span></div><div className="quiz-card"><span className="subject-pill">{q.subject}</span><h2>{q.q}</h2>{q.options.map(o=><label className={`quiz-option ${selected[idx]===o?'selected':''}`} key={o}><input type="radio" checked={selected[idx]===o} onChange={()=>setSelected({...selected,[idx]:o})}/>{o}</label>)}</div><button className="primary-wide" onClick={()=>idx<4?setIdx(idx+1):finish()}>{idx<4?'다음 문제':'채점하기'}</button></>;
+  const q=quiz[idx];
+  return <><PageHead title="퀴즈방"/><div className="quiz-reward-banner">🏆 <b>오늘 딱 한 번 도전! 5문제를 모두 맞히면 +3P</b><span>매일 국어·수학·사회·과학·영어에서 난이도가 섞인 새로운 5문제가 나와요.</span></div>{quizError&&<div className="warning-box">⚠️ {quizError}</div>}<div className="warning-box">⚠️ <b>친구에게 정답을 알려주지 않습니다.</b></div><div className="quiz-meta"><strong>4학년 오늘의 교과 퀴즈 · {date}</strong><span>{idx+1} / 5</span></div><div className="quiz-card"><span className="subject-pill">{q.subject}</span><h2>{q.q}</h2>{q.options.map(o=><label className={`quiz-option ${selected[idx]===o?'selected':''}`} key={o}><input type="radio" checked={selected[idx]===o} onChange={()=>setSelected({...selected,[idx]:o})}/>{o}</label>)}</div><button className="primary-wide" onClick={()=>idx<4?setIdx(idx+1):finish()}>{idx<4?'다음 문제':'채점하기'}</button></>;
 }
 
 function Gallery({onReward,points,setPoints}){
@@ -701,7 +1046,8 @@ function Coupon({points,spend}){
 
 function TeacherApp({profile}){
   const [tab,setTab]=useState('study');
-  return <div className="teacher-shell"><header><div><h1>행복한 다이소반 · 교사 관리자</h1><p>{profile.name||'선생님'} · 4학년 1반</p></div><button onClick={()=>signOut(auth)}>로그아웃</button></header><div className="teacher-tabs"><button className={tab==='study'?'active':''} onClick={()=>setTab('study')}>학습방 관리</button><button className={tab==='content'?'active':''} onClick={()=>setTab('content')}>🧰 게시물 관리</button><button className={tab==='points'?'active':''} onClick={()=>setTab('points')}>💰 개인 포인트</button><button className={tab==='classpoints'?'active':''} onClick={()=>setTab('classpoints')}>🏫 학급 포인트</button><button className={tab==='vote'?'active':''} onClick={()=>setTab('vote')}>투표 관리</button><button className={tab==='coupon'?'active':''} onClick={()=>setTab('coupon')}>쿠폰 건의함</button><button className={tab==='settings'?'active':''} onClick={()=>setTab('settings')}>⚙️ 앱 설정</button></div>{tab==='study'&&<TeacherStudy/>}{tab==='content'&&<TeacherContentManager/>}{tab==='points'&&<TeacherPointManager/>}{tab==='classpoints'&&<TeacherClassPoints/>}{tab==='vote'&&<TeacherVote/>}{tab==='coupon'&&<TeacherSuggestions/>}{tab==='settings'&&<TeacherSettings/>}</div>
+  const [logoOpen,setLogoOpen]=useState(false);
+  return <div className="teacher-shell"><header><div style={{display:'flex',alignItems:'center',gap:12}}><ClassLogo size={48} onClick={()=>setLogoOpen(true)}/><div><h1>행복한 다이소반 · 교사 관리자</h1><p>{profile.name||'선생님'} · 4학년 1반</p></div></div><button onClick={()=>signOut(auth)}>로그아웃</button></header><div className="teacher-tabs"><button className={tab==='study'?'active':''} onClick={()=>setTab('study')}>학습방 관리</button><button className={tab==='content'?'active':''} onClick={()=>setTab('content')}>🧰 게시물 관리</button><button className={tab==='points'?'active':''} onClick={()=>setTab('points')}>💰 개인 포인트</button><button className={tab==='classpoints'?'active':''} onClick={()=>setTab('classpoints')}>🏫 학급 포인트</button><button className={tab==='vote'?'active':''} onClick={()=>setTab('vote')}>투표 관리</button><button className={tab==='coupon'?'active':''} onClick={()=>setTab('coupon')}>쿠폰 건의함</button><button className={tab==='settings'?'active':''} onClick={()=>setTab('settings')}>⚙️ 앱 설정</button></div>{tab==='study'&&<TeacherStudy/>}{tab==='content'&&<TeacherContentManager/>}{tab==='points'&&<TeacherPointManager/>}{tab==='classpoints'&&<TeacherClassPoints/>}{tab==='vote'&&<TeacherVote/>}{tab==='coupon'&&<TeacherSuggestions/>}{tab==='settings'&&<TeacherSettings/>}{logoOpen&&<LogoViewer onClose={()=>setLogoOpen(false)}/>}</div>
 }
 
 function useDriveUrl(){
