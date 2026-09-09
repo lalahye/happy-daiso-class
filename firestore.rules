@@ -71,8 +71,12 @@ service cloud.firestore {
 
 
     match /pointTransactions/{id} {
-      allow create: if isTeacher() || (signedIn() && request.resource.data.uid == request.auth.uid);
+      // 학생은 자기 포인트 내역만 생성/조회할 수 있고,
+      // 교사는 전체 내역을 조회하고 추가·수정·삭제할 수 있습니다.
+      // '내역 취소'는 기존 내역을 지우지 않고 반대 금액의 새 내역을 남기는 방식입니다.
       allow read: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isTeacher() || (signedIn() && request.resource.data.uid == request.auth.uid);
+      allow update, delete: if isTeacher();
     }
 
     match /classPointContributions/{id} {
@@ -103,6 +107,13 @@ service cloud.firestore {
 
 
     match /worksheetRewards/{id} {
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow update, delete: if isTeacher();
+    }
+
+
+    match /quizDailyRewards/{id} {
       allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
       allow read: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
       allow update, delete: if isTeacher();
