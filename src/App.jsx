@@ -234,27 +234,43 @@ function StudentApp({profile}){
   const claimQuizReward=async(score)=>{
     const uid=auth.currentUser.uid;
     const date=localDateKey();
-    const rewardRef=doc(db,'quizDailyRewards',`${uid}_${date}`);
+    const attemptRef=doc(db,'quizAttempts',`${uid}_${date}`);
+    const legacyRewardRef=doc(db,'quizDailyRewards',`${uid}_${date}`);
     const userRef=doc(db,'users',uid);
     const txRef=doc(collection(db,'pointTransactions'));
     let alreadyCompleted=false,awarded=false,next=points;
-    await runTransaction(db,async tx=>{
-      // Firestore transaction은 모든 읽기를 쓰기보다 먼저 수행해야 합니다.
-      const [rewardSnap,userSnap]=await Promise.all([tx.get(rewardRef),tx.get(userRef)]);
-      if(rewardSnap.exists()){alreadyCompleted=true;return;}
 
-      // 퀴즈 결과와 관계없이 오늘의 1회 응시를 확정합니다.
-      // 따라서 퀴즈방을 나갔다 다시 들어와도 같은 날에는 다시 풀 수 없습니다.
-      tx.set(rewardRef,{uid,date,score,completed:true,points:score===5?3:0,createdAt:serverTimestamp()});
+    await runTransaction(db,async tx=>{
+      // 오늘 응시 기록과 기존 하루 보상 기록을 둘 다 확인합니다.
+      // 둘 중 하나라도 있으면 오늘 퀴즈는 다시 제출할 수 없습니다.
+      const [attemptSnap,legacySnap,userSnap]=await Promise.all([
+        tx.get(attemptRef),
+        tx.get(legacyRewardRef),
+        tx.get(userRef)
+      ]);
+
+      if(attemptSnap.exists() || legacySnap.exists()){
+        alreadyCompleted=true;
+        return;
+      }
+
+      // 채점 결과와 관계없이 '오늘 1회 응시 완료'를 먼저 영구 저장합니다.
+      tx.set(attemptRef,{
+        uid,date,score,completed:true,points:score===5?3:0,createdAt:serverTimestamp()
+      });
 
       if(score===5){
         const current=Number(userSnap.data()?.points)||0;
         next=current+3;
         tx.update(userRef,{points:next});
-        tx.set(txRef,{uid,amount:3,reason:'퀴즈방 하루 1회 보상',balanceAfter:next,createdAt:serverTimestamp()});
+        tx.set(txRef,{
+          uid,amount:3,reason:'퀴즈방 하루 1회 보상',balanceAfter:next,
+          quizDate:date,createdAt:serverTimestamp()
+        });
         awarded=true;
       }
     });
+
     if(awarded)setPoints(next);
     return {alreadyCompleted,awarded};
   };
@@ -448,66 +464,64 @@ function Study(){
    setResults(prev=>({...prev,[w.id]:detail}));
 
    const uid=auth.currentUser.uid;
-   const rewardReason=`학습방 문제지 보상 · ${w.title}`;
    const subRef=doc(db,'worksheetSubmissions',`${w.id}_${uid}`);
-   const rewardRef=doc(db,'worksheetRewards',`${w.id}_${uid}`);
-   const userRef=doc(db,'users',uid);
-   const txRef=doc(collection(db,'pointTransactions'));
-
-   let earned=false;
-   let alreadyRewarded=false;
 
    try{
-     // 예전 버전에서 보상표시 문서만 남고 실제 포인트 적립이 빠진 경우를 복구합니다.
-     // 실제 +5P 지급 이력이 있는지 포인트 내역을 기준으로 한 번 더 확인합니다.
-     const historySnap=await getDocs(query(collection(db,'pointTransactions'),where('uid','==',uid)));
-     const hasRewardLog=historySnap.docs.some(d=>{
-       const x=d.data();
-       return Number(x.amount)===5 && (x.worksheetId===w.id || x.reason===rewardReason);
-     });
+     // 채점 결과는 포인트 지급 여부와 관계없이 먼저 저장합니다.
+     await setDoc(subRef,{
+       worksheetId:w.id,worksheetTitle:w.title,uid,
+       studentName:auth.currentUser.displayName||'학생',
+       answers:mine,results:detail,correctCount,total:key.length,
+       rewardThreshold:threshold,updatedAt:serverTimestamp()
+     },{merge:true});
+
+     if(correctCount<threshold){
+       alert(`${key.length}문제 중 ${correctCount}문제 정답!\n${threshold-correctCount}문제만 더 맞히면 +5P!`);
+       return;
+     }
+
+     // 새 보상 장부를 사용합니다. 한 학생이 같은 문제지에서 딱 한 번만 +5P를 받습니다.
+     // 기존 보상 문서가 실제 지급 완료(credited:true)로 남아 있으면 중복 지급하지 않습니다.
+     const legacyRef=doc(db,'worksheetRewards',`${w.id}_${uid}`);
+     const legacySnap=await getDoc(legacyRef);
+     if(legacySnap.exists() && legacySnap.data()?.credited===true){
+       setRewarded(prev=>({...prev,[w.id]:true}));
+       alert(`${key.length}문제 중 ${correctCount}문제 정답!\n이 문제지는 이미 +5P를 받은 문제지예요.`);
+       return;
+     }
+
+     const claimRef=doc(db,'worksheetRewardClaims',`${w.id}_${uid}`);
+     const userRef=doc(db,'users',uid);
+     const txRef=doc(collection(db,'pointTransactions'));
+     let awarded=false;
+     let nextBalance=0;
 
      await runTransaction(db,async tx=>{
-       // 모든 읽기를 쓰기보다 먼저 수행합니다.
-       const [rewardSnap,userSnap]=await Promise.all([tx.get(rewardRef),tx.get(userRef)]);
-       const shouldReward=correctCount>=threshold&&!hasRewardLog;
-       alreadyRewarded=correctCount>=threshold&&hasRewardLog;
+       const [claimSnap,userSnap]=await Promise.all([tx.get(claimRef),tx.get(userRef)]);
+       if(claimSnap.exists()) return;
 
-       tx.set(subRef,{
-         worksheetId:w.id,worksheetTitle:w.title,uid,
-         studentName:auth.currentUser.displayName||'학생',
-         answers:mine,results:detail,correctCount,total:key.length,
-         rewardThreshold:threshold,
-         rewarded5P:hasRewardLog||shouldReward,
-         updatedAt:serverTimestamp()
-       },{merge:true});
-
-       if(shouldReward){
-         const current=Number(userSnap.data()?.points)||0;
-         const next=current+5;
-         tx.update(userRef,{points:next});
-
-         // 보상 문서가 없는 경우에만 새로 만듭니다.
-         // 예전 버전의 보상 문서가 이미 남아 있어도 실제 지급 이력이 없다면 +5P는 정상 복구됩니다.
-         if(!rewardSnap.exists()){
-           tx.set(rewardRef,{worksheetId:w.id,worksheetTitle:w.title,uid,points:5,credited:true,balanceAfter:next,createdAt:serverTimestamp()});
-         }
-
-         tx.set(txRef,{
-           uid,amount:5,worksheetId:w.id,worksheetTitle:w.title,
-           reason:rewardReason,balanceAfter:next,createdAt:serverTimestamp()
-         });
-         earned=true;
-       }
+       const current=Number(userSnap.data()?.points)||0;
+       nextBalance=current+5;
+       tx.update(userRef,{points:nextBalance});
+       tx.set(claimRef,{
+         uid,worksheetId:w.id,worksheetTitle:w.title,
+         points:5,credited:true,balanceAfter:nextBalance,
+         createdAt:serverTimestamp()
+       });
+       tx.set(txRef,{
+         uid,amount:5,worksheetId:w.id,worksheetTitle:w.title,
+         reason:`학습방 문제지 보상 · ${w.title}`,
+         balanceAfter:nextBalance,createdAt:serverTimestamp()
+       });
+       awarded=true;
      });
 
-     if(earned||alreadyRewarded)setRewarded(prev=>({...prev,[w.id]:true}));
-
-     if(earned){
-       alert(`${key.length}문제 중 ${correctCount}문제 정답!\n🎉 목표 ${threshold}문제 이상 달성! +5P가 실제 개인 포인트에 적립됐어요!`);
-     }else if(alreadyRewarded){
-       alert(`${key.length}문제 중 ${correctCount}문제 정답!\n이 문제지는 이미 +5P 지급 내역이 있어 추가 적립되지 않아요.`);
+     setRewarded(prev=>({...prev,[w.id]:true}));
+     if(awarded){
+       await setDoc(subRef,{rewarded5P:true,rewardedAt:serverTimestamp()},{merge:true});
+       alert(`${key.length}문제 중 ${correctCount}문제 정답!\n🎉 +5P 적립 완료! 현재 포인트 ${nextBalance}P`);
      }else{
-       alert(`${key.length}문제 중 ${correctCount}문제 정답!\n${threshold-correctCount}문제만 더 맞히면 +5P!`);
+       alert(`${key.length}문제 중 ${correctCount}문제 정답!\n이 문제지는 이미 +5P를 받은 문제지예요.`);
      }
    }catch(err){
      console.error('학습방 채점/포인트 적립 오류',err);
@@ -527,17 +541,44 @@ function Quiz({claimReward}){
   useEffect(()=>{
     let alive=true;
     const uid=auth.currentUser.uid,date=localDateKey();
-    getDoc(doc(db,'quizDailyRewards',`${uid}_${date}`))
-      .then(s=>{
-        if(!alive)return;
-        setCompletedToday(s.exists());
-        if(s.exists())setTodayResult(s.data());
-      })
-      .catch(err=>{
-        console.error('오늘의 퀴즈 완료 여부 확인 오류',err);
-        if(alive)setCompletedToday(false);
-      });
-    return()=>{alive=false;};
+    const attemptRef=doc(db,'quizAttempts',`${uid}_${date}`);
+    const legacyRef=doc(db,'quizDailyRewards',`${uid}_${date}`);
+
+    // 예전 버전에서 오늘 이미 보상을 받은 학생도 다시 풀 수 없도록 먼저 확인합니다.
+    getDoc(legacyRef).then(s=>{
+      if(!alive)return;
+      if(s.exists()){
+        setCompletedToday(true);
+        setTodayResult(s.data());
+      }
+    }).catch(err=>console.error('기존 퀴즈 기록 확인 오류',err));
+
+    // 새 응시 기록은 실시간으로 감시합니다. 퀴즈방을 나갔다 다시 들어오거나
+    // 새로고침해도 Firestore 기록이 존재하는 한 문제 화면이 다시 열리지 않습니다.
+    const unsub=onSnapshot(attemptRef,s=>{
+      if(!alive)return;
+      if(s.exists()){
+        setCompletedToday(true);
+        setTodayResult(s.data());
+      }else{
+        // 기존 기록도 없을 때에만 오늘 응시 가능 상태로 둡니다.
+        getDoc(legacyRef).then(oldSnap=>{
+          if(!alive)return;
+          if(oldSnap.exists()){
+            setCompletedToday(true);
+            setTodayResult(oldSnap.data());
+          }else{
+            setCompletedToday(false);
+            setTodayResult(null);
+          }
+        }).catch(()=>{ if(alive)setCompletedToday(false); });
+      }
+    },err=>{
+      console.error('오늘의 퀴즈 완료 여부 실시간 확인 오류',err);
+      if(alive)setCompletedToday(false);
+    });
+
+    return()=>{alive=false;unsub();};
   },[]);
 
   const finish=async()=>{
