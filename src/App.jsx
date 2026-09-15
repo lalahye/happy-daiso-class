@@ -1049,11 +1049,12 @@ function Vote({points}){
 
 function Coupon({points,spend}){
   const [idea,setIdea]=useState('');
-  const [coupons,setCoupons]=useState([]);
+  const defaultCoupons=COUPONS.map((c,i)=>({id:`default-${i}`,icon:c[0],name:c[1],price:c[2],description:'',active:true,isDefault:true,order:i}));
+  const [coupons,setCoupons]=useState(defaultCoupons);
   useEffect(()=>onSnapshot(collection(db,'coupons'),snap=>{
-    const rows=snap.docs.map(d=>({id:d.id,...d.data()})).filter(x=>x.active!==false);
-    rows.sort((a,b)=>(Number(a.order)||999)-(Number(b.order)||999)||(Number(a.price)||0)-(Number(b.price)||0));
-    setCoupons(rows);
+    const added=snap.docs.map(d=>({id:d.id,...d.data()})).filter(x=>x.active!==false);
+    added.sort((a,b)=>(Number(a.order)||999)-(Number(b.order)||999)||(Number(a.price)||0)-(Number(b.price)||0));
+    setCoupons([...defaultCoupons,...added]);
   }),[]);
   const buy=async coupon=>{
     const price=Number(coupon.price)||0;
