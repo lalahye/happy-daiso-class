@@ -1049,15 +1049,25 @@ function Vote({points}){
 
 function Coupon({points,spend}){
   const [idea,setIdea]=useState('');
-  const buy=async(name,price)=>{if(!(await spend(price,`${name} 쿠폰 구매`)))return alert('포인트가 부족해요.');await addDoc(collection(db,'couponPurchases'),{uid:auth.currentUser.uid,name,price,status:'requested',createdAt:serverTimestamp()});alert(`${name} 쿠폰을 구매했어요!`)};
+  const [coupons,setCoupons]=useState([]);
+  useEffect(()=>onSnapshot(collection(db,'coupons'),snap=>{
+    const rows=snap.docs.map(d=>({id:d.id,...d.data()})).filter(x=>x.active!==false);
+    rows.sort((a,b)=>(Number(a.order)||999)-(Number(b.order)||999)||(Number(a.price)||0)-(Number(b.price)||0));
+    setCoupons(rows);
+  }),[]);
+  const buy=async coupon=>{
+    const price=Number(coupon.price)||0;
+    if(!(await spend(price,`${coupon.name} 쿠폰 구매`)))return alert('포인트가 부족해요.');
+    await addDoc(collection(db,'couponPurchases'),{uid:auth.currentUser.uid,couponId:coupon.id,name:coupon.name,price,status:'requested',createdAt:serverTimestamp()});
+    alert(`${coupon.name} 쿠폰을 구매했어요!`);
+  };
   const suggest=async e=>{e.preventDefault();await addDoc(collection(db,'couponSuggestions'),{uid:auth.currentUser.uid,studentName:auth.currentUser.displayName||'학생',studentEmail:auth.currentUser.email||'',text:idea,status:'new',createdAt:serverTimestamp()});setIdea('');alert('쿠폰 아이디어를 보냈어요!')};
-  return <><PageHead title="쿠폰 구매" points={points}/><div className="coupon-list">{COUPONS.map(([icon,name,price])=><div className="coupon-row" key={name}><div><span>{icon}</span><strong>{name}</strong></div><b>{price}P</b><button onClick={()=>buy(name,price)}>구매</button></div>)}</div><div className="suggest-card"><div><span className="bulb">💡</span><strong>쿠폰 건의함</strong><p>~이런 쿠폰이 있으면 좋을 것 같아요!</p></div><form onSubmit={suggest}><input value={idea} onChange={e=>setIdea(e.target.value)} placeholder="새로운 쿠폰 아이디어를 적어주세요." required/><button>보내기</button></form></div></>;
+  return <><PageHead title="쿠폰 구매" points={points}/><div className="coupon-list">{coupons.length?coupons.map(c=><div className="coupon-row" key={c.id}><div><span>{c.icon||'🎟️'}</span><strong>{c.name}</strong>{c.description&&<small style={{display:'block',color:'#6b7280',marginTop:3}}>{c.description}</small>}</div><b>{Number(c.price)||0}P</b><button onClick={()=>buy(c)}>구매</button></div>):<Empty text="현재 판매 중인 쿠폰이 없어요."/>}</div><div className="suggest-card"><div><span className="bulb">💡</span><strong>쿠폰 건의함</strong><p>~이런 쿠폰이 있으면 좋을 것 같아요!</p></div><form onSubmit={suggest}><input value={idea} onChange={e=>setIdea(e.target.value)} placeholder="새로운 쿠폰 아이디어를 적어주세요." required/><button>보내기</button></form></div></>;
 }
-
 function TeacherApp({profile}){
   const [tab,setTab]=useState('study');
   const [logoOpen,setLogoOpen]=useState(false);
-  return <div className="teacher-shell"><header><div style={{display:'flex',alignItems:'center',gap:12}}><ClassLogo size={48} onClick={()=>setLogoOpen(true)}/><div><h1>행복한 다이소반 · 교사 관리자</h1><p>{profile.name||'선생님'} · 4학년 1반</p></div></div><button onClick={()=>signOut(auth)}>로그아웃</button></header><div className="teacher-tabs"><button className={tab==='study'?'active':''} onClick={()=>setTab('study')}>학습방 관리</button><button className={tab==='content'?'active':''} onClick={()=>setTab('content')}>🧰 게시물 관리</button><button className={tab==='points'?'active':''} onClick={()=>setTab('points')}>💰 개인 포인트</button><button className={tab==='classpoints'?'active':''} onClick={()=>setTab('classpoints')}>🏫 학급 포인트</button><button className={tab==='vote'?'active':''} onClick={()=>setTab('vote')}>투표 관리</button><button className={tab==='coupon'?'active':''} onClick={()=>setTab('coupon')}>쿠폰 건의함</button><button className={tab==='settings'?'active':''} onClick={()=>setTab('settings')}>⚙️ 앱 설정</button></div>{tab==='study'&&<TeacherStudy/>}{tab==='content'&&<TeacherContentManager/>}{tab==='points'&&<TeacherPointManager/>}{tab==='classpoints'&&<TeacherClassPoints/>}{tab==='vote'&&<TeacherVote/>}{tab==='coupon'&&<TeacherSuggestions/>}{tab==='settings'&&<TeacherSettings/>}{logoOpen&&<LogoViewer onClose={()=>setLogoOpen(false)}/>}</div>
+  return <div className="teacher-shell"><header><div style={{display:'flex',alignItems:'center',gap:12}}><ClassLogo size={48} onClick={()=>setLogoOpen(true)}/><div><h1>행복한 다이소반 · 교사 관리자</h1><p>{profile.name||'선생님'} · 4학년 1반</p></div></div><button onClick={()=>signOut(auth)}>로그아웃</button></header><div className="teacher-tabs"><button className={tab==='study'?'active':''} onClick={()=>setTab('study')}>학습방 관리</button><button className={tab==='content'?'active':''} onClick={()=>setTab('content')}>🧰 게시물 관리</button><button className={tab==='points'?'active':''} onClick={()=>setTab('points')}>💰 개인 포인트</button><button className={tab==='classpoints'?'active':''} onClick={()=>setTab('classpoints')}>🏫 학급 포인트</button><button className={tab==='vote'?'active':''} onClick={()=>setTab('vote')}>투표 관리</button><button className={tab==='coupon'?'active':''} onClick={()=>setTab('coupon')}>🎟️ 쿠폰 관리</button><button className={tab==='settings'?'active':''} onClick={()=>setTab('settings')}>⚙️ 앱 설정</button></div>{tab==='study'&&<TeacherStudy/>}{tab==='content'&&<TeacherContentManager/>}{tab==='points'&&<TeacherPointManager/>}{tab==='classpoints'&&<TeacherClassPoints/>}{tab==='vote'&&<TeacherVote/>}{tab==='coupon'&&<TeacherSuggestions/>}{tab==='settings'&&<TeacherSettings/>}{logoOpen&&<LogoViewer onClose={()=>setLogoOpen(false)}/>}</div>
 }
 
 function useDriveUrl(){
@@ -1364,14 +1374,45 @@ function TeacherVote(){
 }
 
 function TeacherSuggestions(){
-  const [items,setItems]=useState([]);
-  const [loading,setLoading]=useState(true);
-  useEffect(()=>{const q=query(collection(db,'couponSuggestions'),orderBy('createdAt','desc'));return onSnapshot(q,s=>{setItems(s.docs.map(d=>({id:d.id,...d.data()})));setLoading(false)},err=>{console.error(err);setLoading(false)})},[]);
+  const [items,setItems]=useState([]),[coupons,setCoupons]=useState([]),[loading,setLoading]=useState(true);
+  useEffect(()=>{
+    const a=onSnapshot(collection(db,'couponSuggestions'),s=>{const rows=s.docs.map(d=>({id:d.id,...d.data()}));rows.sort((x,y)=>(y.createdAt?.seconds||0)-(x.createdAt?.seconds||0));setItems(rows);setLoading(false)});
+    const b=onSnapshot(collection(db,'coupons'),s=>{const rows=s.docs.map(d=>({id:d.id,...d.data()}));rows.sort((x,y)=>(Number(x.order)||999)-(Number(y.order)||999)||(Number(x.price)||0)-(Number(y.price)||0));setCoupons(rows)});
+    return()=>{a();b()};
+  },[]);
+  const saveCoupon=async(existing=null,prefillName='')=>{
+    const name=window.prompt(existing?'쿠폰 이름을 수정하세요.':'새 쿠폰 이름을 입력하세요.',existing?.name||prefillName||'');
+    if(name===null||!name.trim())return;
+    const priceRaw=window.prompt('쿠폰 가격(P)을 입력하세요.',String(existing?.price||30));
+    if(priceRaw===null)return;
+    const price=Math.max(1,Math.trunc(Number(priceRaw)||0));
+    if(!price)return alert('가격은 1P 이상이어야 합니다.');
+    const icon=window.prompt('쿠폰 앞에 표시할 이모지를 입력하세요.',existing?.icon||'🎟️');
+    if(icon===null)return;
+    const description=window.prompt('쿠폰 설명을 입력하세요. (없으면 비워도 됩니다.)',existing?.description||'');
+    if(description===null)return;
+    const data={name:name.trim(),price,icon:(icon||'🎟️').trim(),description:description.trim(),active:existing?.active!==false,updatedAt:serverTimestamp()};
+    if(existing)await updateDoc(doc(db,'coupons',existing.id),data);
+    else await addDoc(collection(db,'coupons'),{...data,createdAt:serverTimestamp()});
+    alert(existing?'쿠폰을 수정했습니다.':'새 쿠폰을 등록했습니다.');
+  };
+  const toggleCoupon=async c=>updateDoc(doc(db,'coupons',c.id),{active:c.active===false,updatedAt:serverTimestamp()});
+  const removeCoupon=async c=>{if(!window.confirm(`‘${c.name}’ 쿠폰을 삭제할까요?\n기존 학생 구매 기록은 남아 있습니다.`))return;await deleteDoc(doc(db,'coupons',c.id))};
   const markDone=async item=>updateDoc(doc(db,'couponSuggestions',item.id),{status:item.status==='done'?'new':'done'});
-  const editItem=async item=>{const text=window.prompt('쿠폰 아이디어를 수정하세요.',item.text||'');if(text===null||!text.trim())return;await updateDoc(doc(db,'couponSuggestions',item.id),{text:text.trim()})};
+  const editItem=async item=>{const t=window.prompt('쿠폰 아이디어를 수정하세요.',item.text||'');if(t===null||!t.trim())return;await updateDoc(doc(db,'couponSuggestions',item.id),{text:t.trim()})};
   const removeItem=async item=>{if(!window.confirm('이 쿠폰 아이디어를 삭제할까요?'))return;await deleteDoc(doc(db,'couponSuggestions',item.id))};
-  const addItem=async()=>{const text=window.prompt('교사가 새 쿠폰 아이디어를 추가합니다.');if(!text?.trim())return;await addDoc(collection(db,'couponSuggestions'),{uid:auth.currentUser.uid,studentName:'선생님',text:text.trim(),status:'new',createdAt:serverTimestamp()})};
-  return <div className="teacher-card"><div className="teacher-section-head"><div><h2>💡 쿠폰 건의함</h2><p>학생 아이디어를 실시간으로 확인하고 추가·수정·삭제할 수 있습니다.</p></div><button className="primary-action" onClick={addItem}>+ 아이디어 추가</button></div>{loading?<div className="empty-card">불러오는 중...</div>:items.length===0?<Empty text="아직 들어온 쿠폰 아이디어가 없어요."/>:<div className="teacher-suggestion-list">{items.map(x=><div className={`teacher-suggestion-item ${x.status==='done'?'done':''}`} key={x.id}><div className="suggestion-main"><div className="suggestion-meta"><strong>{x.studentName||'학생'}</strong><span>{formatCreatedAt(x.createdAt)}</span></div><p>{x.text}</p></div><div className="admin-actions"><button className="small-action" onClick={()=>markDone(x)}>{x.status==='done'?'다시 보기':'확인 완료'}</button><button className="small-action" onClick={()=>editItem(x)}>수정</button><button className="danger-btn" onClick={()=>removeItem(x)}>삭제</button></div></div>)}</div>}</div>
+  const registerSuggestion=async item=>{
+    await saveCoupon(null,item.text||'');
+    await updateDoc(doc(db,'couponSuggestions',item.id),{status:'done',registeredAsCoupon:true});
+  };
+  return <div className="teacher-classpoint-grid">
+    <div className="teacher-card">
+      <div className="teacher-section-head"><div><h2>🎟️ 판매 쿠폰 관리</h2><p>학생의 쿠폰 구매 화면에 표시할 쿠폰을 직접 등록하고 관리합니다.</p></div><button className="primary-action" onClick={()=>saveCoupon()}>+ 새 쿠폰 등록</button></div>
+      {coupons.length?<div className="teacher-suggestion-list">{coupons.map(c=><div className="teacher-suggestion-item" key={c.id} style={{opacity:c.active===false?.6:1}}><div className="suggestion-main"><div className="suggestion-meta"><strong>{c.icon||'🎟️'} {c.name}</strong><span>{c.active===false?'판매 중지':'판매 중'}</span></div><p>{Number(c.price)||0}P{c.description?` · ${c.description}`:''}</p></div><div className="admin-actions"><button className="small-action" onClick={()=>toggleCoupon(c)}>{c.active===false?'판매 시작':'판매 중지'}</button><button className="small-action" onClick={()=>saveCoupon(c)}>수정</button><button className="danger-btn" onClick={()=>removeCoupon(c)}>삭제</button></div></div>)}</div>:<Empty text="등록된 판매 쿠폰이 없어요. ‘새 쿠폰 등록’을 눌러 첫 쿠폰을 만들어주세요."/>}
+    </div>
+    <div className="teacher-card">
+      <div className="teacher-section-head"><div><h2>💡 학생 쿠폰 건의함</h2><p>학생 아이디어를 확인하고 마음에 드는 아이디어는 바로 판매 쿠폰으로 등록할 수 있습니다.</p></div></div>
+      {loading?<div className="empty-card">불러오는 중...</div>:items.length===0?<Empty text="아직 들어온 쿠폰 아이디어가 없어요."/>:<div className="teacher-suggestion-list">{items.map(x=><div className={`teacher-suggestion-item ${x.status==='done'?'done':''}`} key={x.id}><div className="suggestion-main"><div className="suggestion-meta"><strong>{x.studentName||'학생'}</strong><span>{formatCreatedAt(x.createdAt)}</span></div><p>{x.text}</p></div><div className="admin-actions"><button className="primary-action" onClick={()=>registerSuggestion(x)}>🎟️ 쿠폰으로 등록</button><button className="small-action" onClick={()=>markDone(x)}>{x.status==='done'?'다시 보기':'확인 완료'}</button><button className="small-action" onClick={()=>editItem(x)}>수정</button><button className="danger-btn" onClick={()=>removeItem(x)}>삭제</button></div></div>)}</div>}
+    </div>
+  </div>
 }
-
-function Empty({text}){return <div className="empty-card">🌿<p>{text}</p></div>}
